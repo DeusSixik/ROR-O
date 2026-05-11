@@ -137,7 +137,8 @@ namespace ROR_O.patches
         private static readonly MethodInfo ComponentGetCharacterMotorMethod = MakeComponentGetComponentMethod(typeof(CharacterMotor));
         private static readonly MethodInfo CachedCharacterMotorMethod = AccessTools.Method(
             typeof(OptimizedComponentCache),
-            nameof(OptimizedComponentCache.GetCharacterMotor));
+            nameof(OptimizedComponentCache.GetCharacterMotor),
+            new[] { typeof(Component) });
 
         [HarmonyTranspiler]
         private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
