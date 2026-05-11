@@ -6,7 +6,7 @@ using HarmonyLib;
 using LookingGlass.ItemStatsNameSpace;
 using RoR2;
 
-namespace ROR_O.patches
+namespace ROR_O.patches.mods
 {
     [HarmonyPatch]
     public class OptimizeLookingGlassPatch
