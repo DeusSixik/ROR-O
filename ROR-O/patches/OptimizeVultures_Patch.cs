@@ -9,6 +9,9 @@ namespace ROR_O.patches
         nameof(EntityStates.SolusWing.SummonEliteVultures.FixedUpdate))]
     public class OptimizeVulturesPatch
     {
+        private static readonly System.Reflection.MethodInfo GetFastVultureMuzzleMethod =
+            AccessTools.Method(typeof(OptimizeVulturesPatch), nameof(GetFastVultureMuzzle));
+
         private static readonly string[] CachedVultureMuzzles = new string[10];
 
         static OptimizeVulturesPatch()
@@ -32,37 +35,46 @@ namespace ROR_O.patches
 
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
-            var matcher = new CodeMatcher(instructions);
+            List<CodeInstruction> codeList = new List<CodeInstruction>(instructions);
+            System.Reflection.FieldInfo summonMuzzleField =
+                AccessTools.Field(typeof(EntityStates.SolusWing.SummonEliteVultures),
+                    nameof(EntityStates.SolusWing.SummonEliteVultures.summonMuzzleString));
 
-            matcher.MatchForward(false,
-                new CodeMatch(OpCodes.Ldsfld,
-                    AccessTools.Field(typeof(EntityStates.SolusWing.SummonEliteVultures),
-                        nameof(EntityStates.SolusWing.SummonEliteVultures.summonMuzzleString))));
+            System.Reflection.MethodInfo concatMethod =
+                AccessTools.Method(typeof(string), nameof(string.Concat),
+                    new[] { typeof(string), typeof(string), typeof(string) });
 
-            if (matcher.IsValid)
+            int startIndex = -1;
+            for (int i = 0; i < codeList.Count; i++)
             {
-                int startIndex = matcher.Pos;
-
-                matcher.MatchForward(false,
-                    new CodeMatch(OpCodes.Call,
-                        AccessTools.Method(typeof(string), nameof(string.Concat),
-                            new[] { typeof(string), typeof(string), typeof(string) })));
-
-                if (matcher.IsValid)
+                if (codeList[i].opcode == OpCodes.Ldsfld && Equals(codeList[i].operand, summonMuzzleField))
                 {
-                    int instructionsToRemove = matcher.Pos - startIndex + 1;
-
-                    matcher.Start().Advance(startIndex)
-                        .RemoveInstructions(instructionsToRemove)
-                        .InsertAndAdvance(
-                            new CodeInstruction(OpCodes.Ldarg_0), // Передаем 'this'
-                            Transpilers.EmitDelegate<Func<EntityStates.SolusWing.SummonEliteVultures, string>>(
-                                GetFastVultureMuzzle)
-                        );
+                    startIndex = i;
+                    break;
                 }
             }
 
-            return matcher.InstructionEnumeration();
+            if (startIndex >= 0)
+            {
+                int endIndex = -1;
+                for (int i = startIndex; i < codeList.Count; i++)
+                {
+                    if (codeList[i].opcode == OpCodes.Call && Equals(codeList[i].operand, concatMethod))
+                    {
+                        endIndex = i;
+                        break;
+                    }
+                }
+
+                if (endIndex >= startIndex)
+                {
+                    codeList.RemoveRange(startIndex, endIndex - startIndex + 1);
+                    codeList.Insert(startIndex, new CodeInstruction(OpCodes.Ldarg_0));
+                    codeList.Insert(startIndex + 1, new CodeInstruction(OpCodes.Call, GetFastVultureMuzzleMethod));
+                }
+            }
+
+            return codeList;
         }
     }
 }

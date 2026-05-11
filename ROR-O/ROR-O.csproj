@@ -7,7 +7,6 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
       <Reference Include="0Harmony">
         <HintPath>F:\SteamLibrary\steamapps\common\Risk of Rain 2\BepInEx\core\0Harmony.dll</HintPath>
       </Reference>
@@ -45,21 +44,12 @@
       <Reference Include="HarmonyXInterop">
         <HintPath>F:\SteamLibrary\steamapps\common\Risk of Rain 2\BepInEx\core\HarmonyXInterop.dll</HintPath>
       </Reference>
+      <Reference Include="KinematicCharacterController">
+        <HintPath>F:\SteamLibrary\steamapps\common\Risk of Rain 2\Risk of Rain 2_Data\Managed\KinematicCharacterController.dll</HintPath>
+      </Reference>
       <Reference Include="LookingGlass">
         <HintPath>..\otherMods\LookingGlass.dll</HintPath>
         <Publicize>true</Publicize>
-      </Reference>
-      <Reference Include="Mono.Cecil">
-        <HintPath>F:\SteamLibrary\steamapps\common\Risk of Rain 2\BepInEx\core\Mono.Cecil.dll</HintPath>
-      </Reference>
-      <Reference Include="Mono.Cecil.Mdb">
-        <HintPath>F:\SteamLibrary\steamapps\common\Risk of Rain 2\BepInEx\core\Mono.Cecil.Mdb.dll</HintPath>
-      </Reference>
-      <Reference Include="Mono.Cecil.Pdb">
-        <HintPath>F:\SteamLibrary\steamapps\common\Risk of Rain 2\BepInEx\core\Mono.Cecil.Pdb.dll</HintPath>
-      </Reference>
-      <Reference Include="Mono.Cecil.Rocks">
-        <HintPath>F:\SteamLibrary\steamapps\common\Risk of Rain 2\BepInEx\core\Mono.Cecil.Rocks.dll</HintPath>
       </Reference>
       <Reference Include="MonoMod.RuntimeDetour">
         <HintPath>F:\SteamLibrary\steamapps\common\Risk of Rain 2\BepInEx\core\MonoMod.RuntimeDetour.dll</HintPath>

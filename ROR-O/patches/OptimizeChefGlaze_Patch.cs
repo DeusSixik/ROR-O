@@ -8,6 +8,9 @@ namespace ROR_O.patches
     [HarmonyPatch(typeof(EntityStates.Chef.Glaze), "FixedUpdate")]
     public class OptimizeChefGlazePatch
     {
+        private static readonly System.Reflection.MethodInfo GetFastMuzzleMethod =
+            AccessTools.Method(typeof(OptimizeChefGlazePatch), nameof(GetFastMuzzle));
+
         private static readonly string[] CachedMuzzles = 
         { 
             "MuzzleGlaze0", "MuzzleGlaze1", "MuzzleGlaze2", 
@@ -23,30 +26,41 @@ namespace ROR_O.patches
 
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
-            var matcher = new CodeMatcher(instructions);
+            List<CodeInstruction> codeList = new List<CodeInstruction>(instructions);
+            System.Reflection.MethodInfo concatMethod =
+                AccessTools.Method(typeof(string), nameof(string.Concat), new[] { typeof(string), typeof(string) });
 
-            matcher.MatchForward(false, new CodeMatch(OpCodes.Ldstr, "MuzzleGlaze"));
-
-            if (matcher.IsValid)
+            int startIndex = -1;
+            for (int i = 0; i < codeList.Count; i++)
             {
-                int startIndex = matcher.Pos;
-
-                matcher.MatchForward(false, new CodeMatch(OpCodes.Call, AccessTools.Method(typeof(string), nameof(string.Concat), new[] { typeof(string), typeof(string) })));
-                
-                if (matcher.IsValid)
+                if (codeList[i].opcode == OpCodes.Ldstr && Equals(codeList[i].operand, "MuzzleGlaze"))
                 {
-                    int endIndex = matcher.Pos;
-                    int instructionsToRemove = endIndex - startIndex + 1;
-
-                    matcher.Start().Advance(startIndex)
-                        .RemoveInstructions(instructionsToRemove)
-                        .InsertAndAdvance(
-                            new CodeInstruction(OpCodes.Ldarg_0),
-                            Transpilers.EmitDelegate<Func<EntityStates.Chef.Glaze, string>>(GetFastMuzzle)
-                        );
+                    startIndex = i;
+                    break;
                 }
             }
-            return matcher.InstructionEnumeration();
+
+            if (startIndex >= 0)
+            {
+                int endIndex = -1;
+                for (int i = startIndex; i < codeList.Count; i++)
+                {
+                    if (codeList[i].opcode == OpCodes.Call && Equals(codeList[i].operand, concatMethod))
+                    {
+                        endIndex = i;
+                        break;
+                    }
+                }
+
+                if (endIndex >= startIndex)
+                {
+                    codeList.RemoveRange(startIndex, endIndex - startIndex + 1);
+                    codeList.Insert(startIndex, new CodeInstruction(OpCodes.Ldarg_0));
+                    codeList.Insert(startIndex + 1, new CodeInstruction(OpCodes.Call, GetFastMuzzleMethod));
+                }
+            }
+
+            return codeList;
         }
     }
 }

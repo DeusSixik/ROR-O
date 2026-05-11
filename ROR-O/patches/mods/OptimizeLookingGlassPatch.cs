@@ -13,7 +13,7 @@ namespace ROR_O.patches.mods
     {
         internal static readonly Dictionary<string, string> DescriptionCache = new Dictionary<string, string>();
         
-        static MethodBase TargetMethod()
+        static MethodBase? TargetMethod()
         {
             var type = AccessTools.TypeByName("LookingGlass.ItemStatsNameSpace.ItemStats");
             if (type == null) return null;
@@ -78,7 +78,7 @@ namespace ROR_O.patches.mods
 
                     if (!skipCalculations)
                     {
-                        List<float> values = null;
+                        List<float>? values = null;
 
                         if (statsDef.calculateValuesFlat != null)
                         {
@@ -95,8 +95,11 @@ namespace ROR_O.patches.mods
                         else if (statsDef.calculateValuesBody != null)
                         {
                             // Если master == null, берем тело локального игрока (защита от краша)
-                            CharacterBody body = master?.GetBody() ?? LocalUserManager.GetFirstLocalUser().cachedBody;
-                            values = statsDef.calculateValuesBody(body, newItemCount);
+                            CharacterBody? body = master?.GetBody() ?? LocalUserManager.GetFirstLocalUser()?.cachedBody;
+                            if (body != null)
+                            {
+                                values = statsDef.calculateValuesBody(body, newItemCount);
+                            }
                         }
 
                         // Если формулы вернули данные, форматируем их БЕЗ создания мусора!
