@@ -189,3 +189,6 @@ GitHub repository:
 ## License
 
 See `LICENSE.txt`.
+
+## Support Me
+- [Boosty](https://boosty.to/sixik)
