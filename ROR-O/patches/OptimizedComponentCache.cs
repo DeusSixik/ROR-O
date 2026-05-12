@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using KinematicCharacterController;
 using RoR2;
@@ -14,6 +15,11 @@ namespace ROR_O.patches
             where T : class
         {
             public T? Value;
+        }
+
+        private sealed class NamedTransformCache
+        {
+            public readonly Dictionary<string, Transform?> Values = new Dictionary<string, Transform?>();
         }
 
         private static readonly ConditionalWeakTable<GameObject, CacheBox<CharacterBody>> CharacterBodies =
@@ -93,6 +99,45 @@ namespace ROR_O.patches
 
         private static readonly ConditionalWeakTable<GameObject, CacheBox<ProjectileDamage>> ProjectileDamages =
             new ConditionalWeakTable<GameObject, CacheBox<ProjectileDamage>>();
+
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<ChildLocator>> ChildLocators =
+            new ConditionalWeakTable<GameObject, CacheBox<ChildLocator>>();
+
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<ScaleParticleSystemDuration>> ScaleParticleSystemDurations =
+            new ConditionalWeakTable<GameObject, CacheBox<ScaleParticleSystemDuration>>();
+
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<ObjectScaleCurve>> ObjectScaleCurves =
+            new ConditionalWeakTable<GameObject, CacheBox<ObjectScaleCurve>>();
+
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<CharacterDirection>> CharacterDirections =
+            new ConditionalWeakTable<GameObject, CacheBox<CharacterDirection>>();
+
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<CharacterModel>> CharacterModels =
+            new ConditionalWeakTable<GameObject, CacheBox<CharacterModel>>();
+
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<HurtBoxGroup>> HurtBoxGroups =
+            new ConditionalWeakTable<GameObject, CacheBox<HurtBoxGroup>>();
+
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<HurtBox>> HurtBoxes =
+            new ConditionalWeakTable<GameObject, CacheBox<HurtBox>>();
+
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<Animator>> AnimatorsInChildren =
+            new ConditionalWeakTable<GameObject, CacheBox<Animator>>();
+
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<ParticleSystem>> ParticleSystems =
+            new ConditionalWeakTable<GameObject, CacheBox<ParticleSystem>>();
+
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<ParticleSystem[]>> ParticleSystemsInChildren =
+            new ConditionalWeakTable<GameObject, CacheBox<ParticleSystem[]>>();
+
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<Light[]>> LightsInChildren =
+            new ConditionalWeakTable<GameObject, CacheBox<Light[]>>();
+
+        private static readonly ConditionalWeakTable<Transform, NamedTransformCache> TransformFindCache =
+            new ConditionalWeakTable<Transform, NamedTransformCache>();
+
+        private static readonly ConditionalWeakTable<ChildLocator, NamedTransformCache> ChildLocatorFindCache =
+            new ConditionalWeakTable<ChildLocator, NamedTransformCache>();
 
         public static CharacterBody? GetCharacterBody(GameObject gameObject) =>
             GetOrAdd(gameObject, CharacterBodies, target => target.GetComponent<CharacterBody>());
@@ -190,6 +235,54 @@ namespace ROR_O.patches
         public static ProjectileDamage? GetProjectileDamage(GameObject gameObject) =>
             GetOrAdd(gameObject, ProjectileDamages, target => target.GetComponent<ProjectileDamage>());
 
+        public static ChildLocator? GetChildLocatorFromComponent(Component component) =>
+            GetOrAdd(component, ChildLocators, target => target.GetComponent<ChildLocator>());
+
+        public static ChildLocator? GetChildLocator(GameObject gameObject) =>
+            GetOrAdd(gameObject, ChildLocators, target => target.GetComponent<ChildLocator>());
+
+        public static ScaleParticleSystemDuration? GetScaleParticleSystemDuration(GameObject gameObject) =>
+            GetOrAdd(gameObject, ScaleParticleSystemDurations, target => target.GetComponent<ScaleParticleSystemDuration>());
+
+        public static ScaleParticleSystemDuration? GetScaleParticleSystemDurationFromComponent(Component component) =>
+            GetOrAdd(component, ScaleParticleSystemDurations, target => target.GetComponent<ScaleParticleSystemDuration>());
+
+        public static ObjectScaleCurve? GetObjectScaleCurve(GameObject gameObject) =>
+            GetOrAdd(gameObject, ObjectScaleCurves, target => target.GetComponent<ObjectScaleCurve>());
+
+        public static CharacterDirection? GetCharacterDirectionFromComponent(Component component) =>
+            GetOrAdd(component, CharacterDirections, target => target.GetComponent<CharacterDirection>());
+
+        public static CharacterModel? GetCharacterModelFromComponent(Component component) =>
+            GetOrAdd(component, CharacterModels, target => target.GetComponent<CharacterModel>());
+
+        public static HurtBoxGroup? GetHurtBoxGroupFromComponent(Component component) =>
+            GetOrAdd(component, HurtBoxGroups, target => target.GetComponent<HurtBoxGroup>());
+
+        public static HurtBox? GetHurtBoxFromComponent(Component component) =>
+            GetOrAdd(component, HurtBoxes, target => target.GetComponent<HurtBox>());
+
+        public static Animator? GetAnimatorInChildren(GameObject gameObject) =>
+            GetOrAdd(gameObject, AnimatorsInChildren, target => target.GetComponentInChildren<Animator>());
+
+        public static ParticleSystem? GetParticleSystem(Component component) =>
+            GetOrAdd(component, ParticleSystems, target => target.GetComponent<ParticleSystem>());
+
+        public static ParticleSystem[]? GetParticleSystemsInChildren(Component component) =>
+            GetOrAddArray(component, ParticleSystemsInChildren, target => target.GetComponentsInChildren<ParticleSystem>());
+
+        public static ParticleSystem[]? GetParticleSystemsInChildren(GameObject gameObject) =>
+            GetOrAddArray(gameObject, ParticleSystemsInChildren, target => target.GetComponentsInChildren<ParticleSystem>());
+
+        public static Light[]? GetLightsInChildren(Component component) =>
+            GetOrAddArray(component, LightsInChildren, target => target.GetComponentsInChildren<Light>());
+
+        public static Transform? FindTransform(Transform transform, string childName) =>
+            GetOrFindTransform(transform, childName, target => target.Find(childName), TransformFindCache);
+
+        public static Transform? FindChild(ChildLocator childLocator, string childName) =>
+            GetOrFindTransform(childLocator, childName, target => target.FindChild(childName), ChildLocatorFindCache);
+
         private static T? GetOrAdd<T>(
             Component component,
             ConditionalWeakTable<GameObject, CacheBox<T>> cache,
@@ -219,6 +312,71 @@ namespace ROR_O.patches
             return box.Value;
         }
 
+        private static T[]? GetOrAddArray<T>(
+            Component component,
+            ConditionalWeakTable<GameObject, CacheBox<T[]>> cache,
+            Func<GameObject, T[]?> factory)
+            where T : UnityEngine.Object
+        {
+            return component ? GetOrAddArray(component.gameObject, cache, factory) : null;
+        }
+
+        private static T[]? GetOrAddArray<T>(
+            GameObject gameObject,
+            ConditionalWeakTable<GameObject, CacheBox<T[]>> cache,
+            Func<GameObject, T[]?> factory)
+            where T : UnityEngine.Object
+        {
+            if (!gameObject)
+            {
+                return null;
+            }
+
+            CacheBox<T[]> box = cache.GetOrCreateValue(gameObject);
+            if (IsMissingArray(box.Value))
+            {
+                box.Value = factory(gameObject);
+            }
+
+            return box.Value;
+        }
+
+        private static Transform? GetOrFindTransform<TSource>(
+            TSource source,
+            string childName,
+            Func<TSource, Transform?> finder,
+            ConditionalWeakTable<TSource, NamedTransformCache> cache)
+            where TSource : class
+        {
+            if (source == null)
+            {
+                return null;
+            }
+
+            if (source is UnityEngine.Object unityObject && !unityObject)
+            {
+                return null;
+            }
+
+            NamedTransformCache namedCache = cache.GetOrCreateValue(source);
+            if (namedCache.Values.TryGetValue(childName, out Transform? cachedTransform) && cachedTransform)
+            {
+                return cachedTransform;
+            }
+
+            Transform? foundTransform = finder(source);
+            if (foundTransform)
+            {
+                namedCache.Values[childName] = foundTransform;
+            }
+            else
+            {
+                namedCache.Values.Remove(childName);
+            }
+
+            return foundTransform;
+        }
+
         private static bool IsMissing<T>(T? value)
             where T : class
         {
@@ -228,6 +386,25 @@ namespace ROR_O.patches
             }
 
             return value is UnityEngine.Object unityObject && !unityObject;
+        }
+
+        private static bool IsMissingArray<T>(T[]? value)
+            where T : UnityEngine.Object
+        {
+            if (value == null)
+            {
+                return true;
+            }
+
+            for (int i = 0; i < value.Length; i++)
+            {
+                if (!value[i])
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }

@@ -149,11 +149,32 @@ namespace ROR_O.patches
             .GetMethod(nameof(GameObject.GetComponent), Type.EmptyTypes)!
             .GetGenericMethodDefinition();
 
+        private static readonly MethodInfo GameObjectGetComponentInChildrenDefinition = typeof(GameObject)
+            .GetMethod(nameof(GameObject.GetComponentInChildren), Type.EmptyTypes)!
+            .GetGenericMethodDefinition();
+
+        private static readonly MethodInfo ComponentGetComponentsInChildrenDefinition = typeof(Component)
+            .GetMethod(nameof(Component.GetComponentsInChildren), Type.EmptyTypes)!
+            .GetGenericMethodDefinition();
+
+        private static readonly MethodInfo GameObjectGetComponentsInChildrenDefinition = typeof(GameObject)
+            .GetMethod(nameof(GameObject.GetComponentsInChildren), Type.EmptyTypes)!
+            .GetGenericMethodDefinition();
+
         public static MethodInfo MakeComponentGetComponentMethod(Type componentType) =>
             ComponentGetComponentDefinition.MakeGenericMethod(componentType);
 
         public static MethodInfo MakeGameObjectGetComponentMethod(Type componentType) =>
             GameObjectGetComponentDefinition.MakeGenericMethod(componentType);
+
+        public static MethodInfo MakeGameObjectGetComponentInChildrenMethod(Type componentType) =>
+            GameObjectGetComponentInChildrenDefinition.MakeGenericMethod(componentType);
+
+        public static MethodInfo MakeComponentGetComponentsInChildrenMethod(Type componentType) =>
+            ComponentGetComponentsInChildrenDefinition.MakeGenericMethod(componentType);
+
+        public static MethodInfo MakeGameObjectGetComponentsInChildrenMethod(Type componentType) =>
+            GameObjectGetComponentsInChildrenDefinition.MakeGenericMethod(componentType);
 
         public static bool ReplaceCall(CodeInstruction instruction, MethodInfo source, MethodInfo target)
         {
