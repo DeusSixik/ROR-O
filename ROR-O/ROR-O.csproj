@@ -4,7 +4,7 @@
         <PropertyGroup>
             <StagingDir>$(OutDir)Thunderstore_Staging\</StagingDir>
             <PluginDir>$(StagingDir)plugins\ror-o\</PluginDir>
-            <ZipFileName>$(OutDir)ROR_O-v1.0.0.zip</ZipFileName>
+            <ZipFileName>$(OutDir)ROR_O-v1.0.2.zip</ZipFileName>
         </PropertyGroup>
 
         <RemoveDir Directories="$(StagingDir)"/>
@@ -12,7 +12,7 @@
         <MakeDir Directories="$(PluginDir)"/>
 
         <ItemGroup>
-            <RootFiles Include="$(ProjectDir)README.md"/>
+            <RootFiles Include="$(ProjectDir)\..\README.md"/>
             <RootFiles Include="$(ProjectDir)manifest.json"/>
             <RootFiles Include="$(ProjectDir)icon.png"/>
         </ItemGroup>
@@ -29,7 +29,7 @@
 
         <RemoveDir Directories="$(StagingDir)"/>
 
-        <Message Text="📦 Thunderstore ZIP собран с правильной структурой папок: $(ZipFileName)" Importance="high"/>
+        <Message Text="📦 Thunderstore ZIP created: $(ZipFileName)" Importance="high"/>
     </Target>
 
     <PropertyGroup>

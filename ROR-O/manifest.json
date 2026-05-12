@@ -1,6 +1,6 @@
 ﻿{
   "name": "ROR_O",
-  "version_number": "1.0.1",
+  "version_number": "1.0.2",
   "website_url": "https://github.com/DeusSixik/ROR-O",
   "description": "Performance optimization mod. Reduces repeated UI work, throttles offscreen rigs, and optimizes damage numbers.",
   "dependencies": [
