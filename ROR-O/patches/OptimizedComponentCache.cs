@@ -133,6 +133,9 @@ namespace ROR_O.patches
         private static readonly ConditionalWeakTable<GameObject, CacheBox<Light[]>> LightsInChildren =
             new ConditionalWeakTable<GameObject, CacheBox<Light[]>>();
 
+        private static readonly ConditionalWeakTable<GameObject, CacheBox<Renderer[]>> RenderersInChildren =
+            new ConditionalWeakTable<GameObject, CacheBox<Renderer[]>>();
+
         private static readonly ConditionalWeakTable<Transform, NamedTransformCache> TransformFindCache =
             new ConditionalWeakTable<Transform, NamedTransformCache>();
 
@@ -276,6 +279,12 @@ namespace ROR_O.patches
 
         public static Light[]? GetLightsInChildren(Component component) =>
             GetOrAddArray(component, LightsInChildren, target => target.GetComponentsInChildren<Light>());
+
+        public static Renderer[]? GetRenderersInChildren(Component component) =>
+            GetOrAddArray(component, RenderersInChildren, target => target.GetComponentsInChildren<Renderer>());
+
+        public static Renderer[]? GetRenderersInChildren(GameObject gameObject) =>
+            GetOrAddArray(gameObject, RenderersInChildren, target => target.GetComponentsInChildren<Renderer>());
 
         public static Transform? FindTransform(Transform transform, string childName) =>
             GetOrFindTransform(transform, childName, target => target.Find(childName), TransformFindCache);
