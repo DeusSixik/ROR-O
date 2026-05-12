@@ -4,7 +4,7 @@
         <PropertyGroup>
             <StagingDir>$(OutDir)Thunderstore_Staging\</StagingDir>
             <PluginDir>$(StagingDir)plugins\ror-o\</PluginDir>
-            <ZipFileName>$(OutDir)ROR_O-v1.0.2.zip</ZipFileName>
+            <ZipFileName>$(OutDir)ROR_O-v1.0.4.zip</ZipFileName>
         </PropertyGroup>
 
         <RemoveDir Directories="$(StagingDir)"/>

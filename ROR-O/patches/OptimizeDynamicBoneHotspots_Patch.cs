@@ -1,8 +1,8 @@
 using System;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using HarmonyLib;
 using UnityEngine;
+using ROR_O.Utilities;
 
 namespace ROR_O.patches
 {
@@ -24,8 +24,8 @@ namespace ROR_O.patches
         private static readonly FieldInfo? DynamicBoneNeverOptimizeField =
             DynamicBoneType != null ? AccessTools.Field(DynamicBoneType, "neverOptimize") : null;
 
-        private static readonly ConditionalWeakTable<Component, DynamicBoneState> StateByBone =
-            new ConditionalWeakTable<Component, DynamicBoneState>();
+        private static readonly FixedConditionalWeakTable<Component, DynamicBoneState> StateByBone =
+            new FixedConditionalWeakTable<Component, DynamicBoneState>();
 
         private static int cachedCameraFrame = int.MinValue;
         private static Camera? cachedMainCamera;

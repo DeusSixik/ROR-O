@@ -1,13 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using HarmonyLib;
 using RoR2;
 using RoR2.UI;
 using UnityEngine;
 using PlatformID = RoR2.PlatformID;
 using static ROR_O.patches.OptimizeGetComponentPatchTools;
+using ROR_O.Utilities;
 
 namespace ROR_O.patches
 {
@@ -19,14 +19,14 @@ namespace ROR_O.patches
             public float NextAllowedTime;
         }
 
-        private static readonly ConditionalWeakTable<LobbyUserList, ThrottleState> LobbyStates =
-            new ConditionalWeakTable<LobbyUserList, ThrottleState>();
+        private static readonly FixedConditionalWeakTable<LobbyUserList, ThrottleState> LobbyStates =
+            new FixedConditionalWeakTable<LobbyUserList, ThrottleState>();
 
-        private static readonly ConditionalWeakTable<SocialUserIconBehavior, ThrottleState> AvatarStates =
-            new ConditionalWeakTable<SocialUserIconBehavior, ThrottleState>();
+        private static readonly FixedConditionalWeakTable<SocialUserIconBehavior, ThrottleState> AvatarStates =
+            new FixedConditionalWeakTable<SocialUserIconBehavior, ThrottleState>();
 
-        private static readonly ConditionalWeakTable<SurvivorIconController, ThrottleState> SurvivorStates =
-            new ConditionalWeakTable<SurvivorIconController, ThrottleState>();
+        private static readonly FixedConditionalWeakTable<SurvivorIconController, ThrottleState> SurvivorStates =
+            new FixedConditionalWeakTable<SurvivorIconController, ThrottleState>();
 
         public static void MarkLobbyDirty(LobbyUserList? lobbyUserList)
         {
@@ -58,7 +58,7 @@ namespace ROR_O.patches
             return ShouldRun(controller, intervalSeconds, SurvivorStates);
         }
 
-        private static void MarkDirty<T>(T? instance, ConditionalWeakTable<T, ThrottleState> table)
+        private static void MarkDirty<T>(T? instance, FixedConditionalWeakTable<T, ThrottleState> table)
             where T : class
         {
             if (instance == null)
@@ -71,7 +71,7 @@ namespace ROR_O.patches
             state.NextAllowedTime = 0f;
         }
 
-        private static bool ShouldRun<T>(T? instance, float intervalSeconds, ConditionalWeakTable<T, ThrottleState> table)
+        private static bool ShouldRun<T>(T? instance, float intervalSeconds, FixedConditionalWeakTable<T, ThrottleState> table)
             where T : class
         {
             if (instance == null)

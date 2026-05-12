@@ -1,6 +1,6 @@
 ﻿{
   "name": "ROR_O",
-  "version_number": "1.0.2",
+  "version_number": "1.0.4",
   "website_url": "https://github.com/DeusSixik/ROR-O",
   "description": "Performance optimization mod for Risk of Rain 2. Reduces UI overhead, throttles expensive rigs, and optimizes several gameplay hot paths.",
   "dependencies": [ ]

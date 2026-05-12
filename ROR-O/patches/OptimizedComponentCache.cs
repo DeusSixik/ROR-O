@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using KinematicCharacterController;
 using RoR2;
 using RoR2.Projectile;
 using UnityEngine;
 using UnityEngine.Networking;
+using ROR_O.Utilities;
 
 namespace ROR_O.patches
 {
@@ -22,125 +22,125 @@ namespace ROR_O.patches
             public readonly Dictionary<string, Transform?> Values = new Dictionary<string, Transform?>();
         }
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<CharacterBody>> CharacterBodies =
-            new ConditionalWeakTable<GameObject, CacheBox<CharacterBody>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<CharacterBody>> CharacterBodies =
+            new FixedConditionalWeakTable<GameObject, CacheBox<CharacterBody>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<CharacterMaster>> CharacterMasters =
-            new ConditionalWeakTable<GameObject, CacheBox<CharacterMaster>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<CharacterMaster>> CharacterMasters =
+            new FixedConditionalWeakTable<GameObject, CacheBox<CharacterMaster>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<EquipmentSlot>> EquipmentSlots =
-            new ConditionalWeakTable<GameObject, CacheBox<EquipmentSlot>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<EquipmentSlot>> EquipmentSlots =
+            new FixedConditionalWeakTable<GameObject, CacheBox<EquipmentSlot>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<HealthComponent>> HealthComponents =
-            new ConditionalWeakTable<GameObject, CacheBox<HealthComponent>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<HealthComponent>> HealthComponents =
+            new FixedConditionalWeakTable<GameObject, CacheBox<HealthComponent>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<HuntressTracker>> HuntressTrackers =
-            new ConditionalWeakTable<GameObject, CacheBox<HuntressTracker>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<HuntressTracker>> HuntressTrackers =
+            new FixedConditionalWeakTable<GameObject, CacheBox<HuntressTracker>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<DamageTrail>> DamageTrails =
-            new ConditionalWeakTable<GameObject, CacheBox<DamageTrail>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<DamageTrail>> DamageTrails =
+            new FixedConditionalWeakTable<GameObject, CacheBox<DamageTrail>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<Rigidbody>> Rigidbodies =
-            new ConditionalWeakTable<GameObject, CacheBox<Rigidbody>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<Rigidbody>> Rigidbodies =
+            new FixedConditionalWeakTable<GameObject, CacheBox<Rigidbody>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<Rigidbody2D>> Rigidbodies2D =
-            new ConditionalWeakTable<GameObject, CacheBox<Rigidbody2D>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<Rigidbody2D>> Rigidbodies2D =
+            new FixedConditionalWeakTable<GameObject, CacheBox<Rigidbody2D>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<IInspectable>> Inspectables =
-            new ConditionalWeakTable<GameObject, CacheBox<IInspectable>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<IInspectable>> Inspectables =
+            new FixedConditionalWeakTable<GameObject, CacheBox<IInspectable>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<IInteractable>> Interactables =
-            new ConditionalWeakTable<GameObject, CacheBox<IInteractable>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<IInteractable>> Interactables =
+            new FixedConditionalWeakTable<GameObject, CacheBox<IInteractable>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<InteractionDriver>> InteractionDrivers =
-            new ConditionalWeakTable<GameObject, CacheBox<InteractionDriver>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<InteractionDriver>> InteractionDrivers =
+            new FixedConditionalWeakTable<GameObject, CacheBox<InteractionDriver>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<InputBankTest>> InputBankTests =
-            new ConditionalWeakTable<GameObject, CacheBox<InputBankTest>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<InputBankTest>> InputBankTests =
+            new FixedConditionalWeakTable<GameObject, CacheBox<InputBankTest>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<CameraTargetParams>> CameraTargetParamsCache =
-            new ConditionalWeakTable<GameObject, CacheBox<CameraTargetParams>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<CameraTargetParams>> CameraTargetParamsCache =
+            new FixedConditionalWeakTable<GameObject, CacheBox<CameraTargetParams>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<ChefController>> ChefControllers =
-            new ConditionalWeakTable<GameObject, CacheBox<ChefController>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<ChefController>> ChefControllers =
+            new FixedConditionalWeakTable<GameObject, CacheBox<ChefController>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<CharacterMotor>> CharacterMotors =
-            new ConditionalWeakTable<GameObject, CacheBox<CharacterMotor>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<CharacterMotor>> CharacterMotors =
+            new FixedConditionalWeakTable<GameObject, CacheBox<CharacterMotor>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<RigidbodyMotor>> RigidbodyMotors =
-            new ConditionalWeakTable<GameObject, CacheBox<RigidbodyMotor>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<RigidbodyMotor>> RigidbodyMotors =
+            new FixedConditionalWeakTable<GameObject, CacheBox<RigidbodyMotor>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<KinematicCharacterMotor>> KinematicCharacterMotors =
-            new ConditionalWeakTable<GameObject, CacheBox<KinematicCharacterMotor>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<KinematicCharacterMotor>> KinematicCharacterMotors =
+            new FixedConditionalWeakTable<GameObject, CacheBox<KinematicCharacterMotor>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<NetworkIdentity>> NetworkIdentities =
-            new ConditionalWeakTable<GameObject, CacheBox<NetworkIdentity>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<NetworkIdentity>> NetworkIdentities =
+            new FixedConditionalWeakTable<GameObject, CacheBox<NetworkIdentity>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<NetworkUser>> NetworkUsers =
-            new ConditionalWeakTable<GameObject, CacheBox<NetworkUser>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<NetworkUser>> NetworkUsers =
+            new FixedConditionalWeakTable<GameObject, CacheBox<NetworkUser>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<FalseSonBossController>> FalseSonBossControllers =
-            new ConditionalWeakTable<GameObject, CacheBox<FalseSonBossController>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<FalseSonBossController>> FalseSonBossControllers =
+            new FixedConditionalWeakTable<GameObject, CacheBox<FalseSonBossController>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<OilGhostController>> OilGhostControllers =
-            new ConditionalWeakTable<GameObject, CacheBox<OilGhostController>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<OilGhostController>> OilGhostControllers =
+            new FixedConditionalWeakTable<GameObject, CacheBox<OilGhostController>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<PlayerCharacterMasterController>> PlayerCharacterMasterControllers =
-            new ConditionalWeakTable<GameObject, CacheBox<PlayerCharacterMasterController>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<PlayerCharacterMasterController>> PlayerCharacterMasterControllers =
+            new FixedConditionalWeakTable<GameObject, CacheBox<PlayerCharacterMasterController>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<SkillLocator>> SkillLocators =
-            new ConditionalWeakTable<GameObject, CacheBox<SkillLocator>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<SkillLocator>> SkillLocators =
+            new FixedConditionalWeakTable<GameObject, CacheBox<SkillLocator>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<TeamFilter>> TeamFilters =
-            new ConditionalWeakTable<GameObject, CacheBox<TeamFilter>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<TeamFilter>> TeamFilters =
+            new FixedConditionalWeakTable<GameObject, CacheBox<TeamFilter>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<ProjectileController>> ProjectileControllers =
-            new ConditionalWeakTable<GameObject, CacheBox<ProjectileController>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<ProjectileController>> ProjectileControllers =
+            new FixedConditionalWeakTable<GameObject, CacheBox<ProjectileController>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<ProjectileDamage>> ProjectileDamages =
-            new ConditionalWeakTable<GameObject, CacheBox<ProjectileDamage>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<ProjectileDamage>> ProjectileDamages =
+            new FixedConditionalWeakTable<GameObject, CacheBox<ProjectileDamage>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<ChildLocator>> ChildLocators =
-            new ConditionalWeakTable<GameObject, CacheBox<ChildLocator>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<ChildLocator>> ChildLocators =
+            new FixedConditionalWeakTable<GameObject, CacheBox<ChildLocator>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<ScaleParticleSystemDuration>> ScaleParticleSystemDurations =
-            new ConditionalWeakTable<GameObject, CacheBox<ScaleParticleSystemDuration>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<ScaleParticleSystemDuration>> ScaleParticleSystemDurations =
+            new FixedConditionalWeakTable<GameObject, CacheBox<ScaleParticleSystemDuration>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<ObjectScaleCurve>> ObjectScaleCurves =
-            new ConditionalWeakTable<GameObject, CacheBox<ObjectScaleCurve>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<ObjectScaleCurve>> ObjectScaleCurves =
+            new FixedConditionalWeakTable<GameObject, CacheBox<ObjectScaleCurve>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<CharacterDirection>> CharacterDirections =
-            new ConditionalWeakTable<GameObject, CacheBox<CharacterDirection>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<CharacterDirection>> CharacterDirections =
+            new FixedConditionalWeakTable<GameObject, CacheBox<CharacterDirection>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<CharacterModel>> CharacterModels =
-            new ConditionalWeakTable<GameObject, CacheBox<CharacterModel>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<CharacterModel>> CharacterModels =
+            new FixedConditionalWeakTable<GameObject, CacheBox<CharacterModel>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<HurtBoxGroup>> HurtBoxGroups =
-            new ConditionalWeakTable<GameObject, CacheBox<HurtBoxGroup>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<HurtBoxGroup>> HurtBoxGroups =
+            new FixedConditionalWeakTable<GameObject, CacheBox<HurtBoxGroup>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<HurtBox>> HurtBoxes =
-            new ConditionalWeakTable<GameObject, CacheBox<HurtBox>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<HurtBox>> HurtBoxes =
+            new FixedConditionalWeakTable<GameObject, CacheBox<HurtBox>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<Animator>> AnimatorsInChildren =
-            new ConditionalWeakTable<GameObject, CacheBox<Animator>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<Animator>> AnimatorsInChildren =
+            new FixedConditionalWeakTable<GameObject, CacheBox<Animator>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<ParticleSystem>> ParticleSystems =
-            new ConditionalWeakTable<GameObject, CacheBox<ParticleSystem>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<ParticleSystem>> ParticleSystems =
+            new FixedConditionalWeakTable<GameObject, CacheBox<ParticleSystem>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<ParticleSystem[]>> ParticleSystemsInChildren =
-            new ConditionalWeakTable<GameObject, CacheBox<ParticleSystem[]>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<ParticleSystem[]>> ParticleSystemsInChildren =
+            new FixedConditionalWeakTable<GameObject, CacheBox<ParticleSystem[]>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<Light[]>> LightsInChildren =
-            new ConditionalWeakTable<GameObject, CacheBox<Light[]>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<Light[]>> LightsInChildren =
+            new FixedConditionalWeakTable<GameObject, CacheBox<Light[]>>();
 
-        private static readonly ConditionalWeakTable<GameObject, CacheBox<Renderer[]>> RenderersInChildren =
-            new ConditionalWeakTable<GameObject, CacheBox<Renderer[]>>();
+        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<Renderer[]>> RenderersInChildren =
+            new FixedConditionalWeakTable<GameObject, CacheBox<Renderer[]>>();
 
-        private static readonly ConditionalWeakTable<Transform, NamedTransformCache> TransformFindCache =
-            new ConditionalWeakTable<Transform, NamedTransformCache>();
+        private static readonly FixedConditionalWeakTable<Transform, NamedTransformCache> TransformFindCache =
+            new FixedConditionalWeakTable<Transform, NamedTransformCache>();
 
-        private static readonly ConditionalWeakTable<ChildLocator, NamedTransformCache> ChildLocatorFindCache =
-            new ConditionalWeakTable<ChildLocator, NamedTransformCache>();
+        private static readonly FixedConditionalWeakTable<ChildLocator, NamedTransformCache> ChildLocatorFindCache =
+            new FixedConditionalWeakTable<ChildLocator, NamedTransformCache>();
 
         public static CharacterBody? GetCharacterBody(GameObject gameObject) =>
             GetOrAdd(gameObject, CharacterBodies, target => target.GetComponent<CharacterBody>());
@@ -294,7 +294,7 @@ namespace ROR_O.patches
 
         private static T? GetOrAdd<T>(
             Component component,
-            ConditionalWeakTable<GameObject, CacheBox<T>> cache,
+            FixedConditionalWeakTable<GameObject, CacheBox<T>> cache,
             Func<GameObject, T?> factory)
             where T : class
         {
@@ -303,7 +303,7 @@ namespace ROR_O.patches
 
         private static T? GetOrAdd<T>(
             GameObject gameObject,
-            ConditionalWeakTable<GameObject, CacheBox<T>> cache,
+            FixedConditionalWeakTable<GameObject, CacheBox<T>> cache,
             Func<GameObject, T?> factory)
             where T : class
         {
@@ -323,7 +323,7 @@ namespace ROR_O.patches
 
         private static T[]? GetOrAddArray<T>(
             Component component,
-            ConditionalWeakTable<GameObject, CacheBox<T[]>> cache,
+            FixedConditionalWeakTable<GameObject, CacheBox<T[]>> cache,
             Func<GameObject, T[]?> factory)
             where T : UnityEngine.Object
         {
@@ -332,7 +332,7 @@ namespace ROR_O.patches
 
         private static T[]? GetOrAddArray<T>(
             GameObject gameObject,
-            ConditionalWeakTable<GameObject, CacheBox<T[]>> cache,
+            FixedConditionalWeakTable<GameObject, CacheBox<T[]>> cache,
             Func<GameObject, T[]?> factory)
             where T : UnityEngine.Object
         {
@@ -354,7 +354,7 @@ namespace ROR_O.patches
             TSource source,
             string childName,
             Func<TSource, Transform?> finder,
-            ConditionalWeakTable<TSource, NamedTransformCache> cache)
+            FixedConditionalWeakTable<TSource, NamedTransformCache> cache)
             where TSource : class
         {
             if (source == null)
