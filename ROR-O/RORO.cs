@@ -246,7 +246,7 @@ namespace ROR_O
 
         private const string Modguid = "net.sixik.plugin.roro";
         private const string ModName = "ROR-O";
-        private const string ModVersion = "1.0.0";
+        private const string ModVersion = "1.0.1";
 
         private void Awake()
         {
