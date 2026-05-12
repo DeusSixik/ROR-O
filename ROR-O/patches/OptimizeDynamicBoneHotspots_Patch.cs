@@ -27,6 +27,9 @@ namespace ROR_O.patches
         private static readonly ConditionalWeakTable<Component, DynamicBoneState> StateByBone =
             new ConditionalWeakTable<Component, DynamicBoneState>();
 
+        private static int cachedCameraFrame = int.MinValue;
+        private static Camera? cachedMainCamera;
+
         private static bool Prepare()
         {
             if (DynamicBoneLateUpdateMethod == null)
@@ -70,23 +73,52 @@ namespace ROR_O.patches
                 return true;
             }
 
+            int invisibleInterval = Mathf.Max(2, ROROConfig.DynamicBoneInvisibleUpdateInterval);
+            int visibleMidInterval = Mathf.Max(1, ROROConfig.DynamicBoneVisibleMidUpdateInterval);
+            int visibleFarInterval = Mathf.Max(visibleMidInterval, ROROConfig.DynamicBoneVisibleFarUpdateInterval);
+            int visibleInterval = 1;
             int currentFrame = Time.frameCount;
             DynamicBoneState state = StateByBone.GetOrCreateValue(__instance);
 
             if (AnyRendererVisible(renderers))
             {
                 state.LastVisibleFrame = currentFrame;
+
+                Camera? camera = GetMainCamera();
+                if (camera != null)
+                {
+                    float distanceSqr = (GetReferencePosition(__instance) - camera.transform.position).sqrMagnitude;
+                    float midDistance = Mathf.Max(0f, ROROConfig.DynamicBoneVisibleMidDistance);
+                    float farDistance = Mathf.Max(midDistance, ROROConfig.DynamicBoneVisibleFarDistance);
+                    float midDistanceSqr = midDistance * midDistance;
+                    float farDistanceSqr = farDistance * farDistance;
+
+                    if (distanceSqr >= farDistanceSqr)
+                    {
+                        visibleInterval = visibleFarInterval;
+                    }
+                    else if (distanceSqr >= midDistanceSqr)
+                    {
+                        visibleInterval = visibleMidInterval;
+                    }
+                }
+            }
+            else if (currentFrame - state.LastVisibleFrame <= ROROConfig.DynamicBoneRecentlyVisibleGraceFrames)
+            {
                 return true;
             }
+            else
+            {
+                visibleInterval = invisibleInterval;
+            }
 
-            if (currentFrame - state.LastVisibleFrame <= ROROConfig.DynamicBoneRecentlyVisibleGraceFrames)
+            if (visibleInterval <= 1)
             {
                 return true;
             }
 
-            int updateInterval = Mathf.Max(2, ROROConfig.DynamicBoneInvisibleUpdateInterval);
             int staggeredFrame = currentFrame + (__instance.GetInstanceID() & int.MaxValue);
-            return staggeredFrame % updateInterval == 0;
+            return staggeredFrame % visibleInterval == 0;
         }
 
         private static Renderer[]? ResolveRenderers(Component dynamicBone)
@@ -102,6 +134,24 @@ namespace ROR_O.patches
             }
 
             return renderers;
+        }
+
+        private static Vector3 GetReferencePosition(Component dynamicBone)
+        {
+            Transform? root = DynamicBoneRootField?.GetValue(dynamicBone) as Transform;
+            return root != null ? root.position : dynamicBone.transform.position;
+        }
+
+        private static Camera? GetMainCamera()
+        {
+            int currentFrame = Time.frameCount;
+            if (cachedCameraFrame != currentFrame)
+            {
+                cachedMainCamera = Camera.main;
+                cachedCameraFrame = currentFrame;
+            }
+
+            return cachedMainCamera;
         }
 
         private static bool AnyRendererVisible(Renderer[] renderers)
