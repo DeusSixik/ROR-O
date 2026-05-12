@@ -1,6 +1,7 @@
 using System.Text;
 using HarmonyLib;
 using TMPro;
+using UnityEngine;
 
 namespace ROR_O.patches
 {
@@ -8,6 +9,12 @@ namespace ROR_O.patches
     {
         private static readonly AccessTools.FieldRef<TMP_Text, string> CurrentTextField =
             AccessTools.FieldRefAccess<TMP_Text, string>("m_text");
+
+        private static readonly AccessTools.FieldRef<TMP_Text, int> CurrentMaxVisibleCharactersField =
+            AccessTools.FieldRefAccess<TMP_Text, int>("m_maxVisibleCharacters");
+
+        private static readonly AccessTools.FieldRef<TMP_Text, Color> CurrentFontColorField =
+            AccessTools.FieldRefAccess<TMP_Text, Color>("m_fontColor");
 
         public static bool ShouldApplyString(TMP_Text? textComponent, string? incomingText)
         {
@@ -57,6 +64,26 @@ namespace ROR_O.patches
 
             return ShouldApplyStringBuilder(textComponent, sourceText, 0, sourceText.Length);
         }
+
+        public static bool ShouldApplyMaxVisibleCharacters(TMP_Text? textComponent, int value)
+        {
+            if (textComponent == null)
+            {
+                return true;
+            }
+
+            return CurrentMaxVisibleCharactersField(textComponent) != value;
+        }
+
+        public static bool ShouldApplyAlpha(TMP_Text? textComponent, float value)
+        {
+            if (textComponent == null)
+            {
+                return true;
+            }
+
+            return !Mathf.Approximately(CurrentFontColorField(textComponent).a, value);
+        }
     }
 
     [HarmonyPatch(typeof(TMP_Text), "set_text")]
@@ -96,6 +123,26 @@ namespace ROR_O.patches
         private static bool Prefix(TMP_Text __instance, StringBuilder sourceText, int start, int length)
         {
             return TextMeshHotspotDeduplication.ShouldApplyStringBuilder(__instance, sourceText, start, length);
+        }
+    }
+
+    [HarmonyPatch(typeof(TMP_Text), "set_maxVisibleCharacters")]
+    public static class OptimizeTmpTextMaxVisibleCharactersPatch
+    {
+        [HarmonyPrefix]
+        private static bool Prefix(TMP_Text __instance, int value)
+        {
+            return TextMeshHotspotDeduplication.ShouldApplyMaxVisibleCharacters(__instance, value);
+        }
+    }
+
+    [HarmonyPatch(typeof(TMP_Text), "set_alpha")]
+    public static class OptimizeTmpTextAlphaPatch
+    {
+        [HarmonyPrefix]
+        private static bool Prefix(TMP_Text __instance, float value)
+        {
+            return TextMeshHotspotDeduplication.ShouldApplyAlpha(__instance, value);
         }
     }
 }
