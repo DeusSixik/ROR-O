@@ -29,6 +29,17 @@ namespace ROR_O
         private static ConfigEntry<bool>? preserveCriticalHits;
         private static ConfigEntry<bool>? preserveImportantColors;
 
+        private static ConfigEntry<bool>? enableDynamicBoneInvisibleThrottling;
+        private static ConfigEntry<int>? dynamicBoneInvisibleUpdateInterval;
+        private static ConfigEntry<int>? dynamicBoneRecentlyVisibleGraceFrames;
+        private static ConfigEntry<float>? dynamicBoneVisibleMidDistance;
+        private static ConfigEntry<float>? dynamicBoneVisibleFarDistance;
+        private static ConfigEntry<int>? dynamicBoneVisibleMidUpdateInterval;
+        private static ConfigEntry<int>? dynamicBoneVisibleFarUpdateInterval;
+        private static ConfigEntry<bool>? enableGenericIkInvisibleThrottling;
+        private static ConfigEntry<int>? genericIkInvisibleUpdateInterval;
+        private static ConfigEntry<int>? genericIkRecentlyVisibleGraceFrames;
+
         public static bool EnableDamageNumberLoadShedding => enableDamageNumberLoadShedding?.Value ?? true;
         public static int SoftParticleCap => softParticleCap?.Value ?? 128;
         public static int HardParticleCap => hardParticleCap?.Value ?? 192;
@@ -50,6 +61,17 @@ namespace ROR_O
 
         public static bool PreserveCriticalHits => preserveCriticalHits?.Value ?? true;
         public static bool PreserveImportantColors => preserveImportantColors?.Value ?? true;
+
+        public static bool EnableDynamicBoneInvisibleThrottling => enableDynamicBoneInvisibleThrottling?.Value ?? true;
+        public static int DynamicBoneInvisibleUpdateInterval => dynamicBoneInvisibleUpdateInterval?.Value ?? 3;
+        public static int DynamicBoneRecentlyVisibleGraceFrames => dynamicBoneRecentlyVisibleGraceFrames?.Value ?? 12;
+        public static float DynamicBoneVisibleMidDistance => dynamicBoneVisibleMidDistance?.Value ?? 30f;
+        public static float DynamicBoneVisibleFarDistance => dynamicBoneVisibleFarDistance?.Value ?? 55f;
+        public static int DynamicBoneVisibleMidUpdateInterval => dynamicBoneVisibleMidUpdateInterval?.Value ?? 2;
+        public static int DynamicBoneVisibleFarUpdateInterval => dynamicBoneVisibleFarUpdateInterval?.Value ?? 3;
+        public static bool EnableGenericIkInvisibleThrottling => enableGenericIkInvisibleThrottling?.Value ?? true;
+        public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 2;
+        public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 8;
 
         public static void Bind(ConfigFile config)
         {
@@ -150,6 +172,70 @@ namespace ROR_O
                 "Preserve Important Colors",
                 true,
                 "Always allow important color categories like heal and weak point through the load shedding filter.");
+
+            const string dynamicBonesSection = "Dynamic Bones";
+
+            enableDynamicBoneInvisibleThrottling = config.Bind(
+                dynamicBonesSection,
+                "Enable Invisible Update Throttling",
+                true,
+                "Throttles DynamicBone LateUpdate calls when the affected renderers are offscreen.");
+
+            dynamicBoneInvisibleUpdateInterval = config.Bind(
+                dynamicBonesSection,
+                "Invisible Update Interval",
+                3,
+                "When a DynamicBone is offscreen for a while, only let it fully update once every N frames.");
+
+            dynamicBoneRecentlyVisibleGraceFrames = config.Bind(
+                dynamicBonesSection,
+                "Recently Visible Grace Frames",
+                12,
+                "Keeps DynamicBone updating normally for a short time after it leaves the screen to reduce visible popping.");
+
+            dynamicBoneVisibleMidDistance = config.Bind(
+                dynamicBonesSection,
+                "Visible Mid Distance",
+                30f,
+                "When a visible DynamicBone rig is at least this far from the camera, it can be updated less often.");
+
+            dynamicBoneVisibleFarDistance = config.Bind(
+                dynamicBonesSection,
+                "Visible Far Distance",
+                55f,
+                "When a visible DynamicBone rig is at least this far from the camera, it can be updated even less often.");
+
+            dynamicBoneVisibleMidUpdateInterval = config.Bind(
+                dynamicBonesSection,
+                "Visible Mid Update Interval",
+                2,
+                "When a visible DynamicBone rig is beyond the mid distance, only run a full LateUpdate once every N frames.");
+
+            dynamicBoneVisibleFarUpdateInterval = config.Bind(
+                dynamicBonesSection,
+                "Visible Far Update Interval",
+                3,
+                "When a visible DynamicBone rig is beyond the far distance, only run a full LateUpdate once every N frames.");
+
+            const string genericIkSection = "Generic IK";
+
+            enableGenericIkInvisibleThrottling = config.Bind(
+                genericIkSection,
+                "Enable Invisible Update Throttling",
+                true,
+                "Throttles GenericIK LateUpdate calls when the animated character has been offscreen for a short time.");
+
+            genericIkInvisibleUpdateInterval = config.Bind(
+                genericIkSection,
+                "Invisible Update Interval",
+                2,
+                "When a GenericIK rig is offscreen, only let it run a full LateUpdate once every N frames.");
+
+            genericIkRecentlyVisibleGraceFrames = config.Bind(
+                genericIkSection,
+                "Recently Visible Grace Frames",
+                8,
+                "Keeps GenericIK updating normally for a short time after it leaves the screen to reduce visible snapping.");
         }
     }
 
