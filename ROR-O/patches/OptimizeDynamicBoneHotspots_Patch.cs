@@ -2,7 +2,6 @@ using System;
 using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
-using ROR_O.Utilities;
 
 namespace ROR_O.patches
 {
