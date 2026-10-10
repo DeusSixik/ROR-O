@@ -72,6 +72,9 @@ namespace ROR_O
         public static bool EnableGenericIkInvisibleThrottling => enableGenericIkInvisibleThrottling?.Value ?? true;
         public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 2;
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 8;
+        public static bool EnableMonoProfiler => enableMonoProfiler?.Value ?? false;
+
+        private static ConfigEntry<bool>? enableMonoProfiler;
 
         public static void Bind(ConfigFile config)
         {
@@ -236,10 +239,55 @@ namespace ROR_O
                 "Recently Visible Grace Frames",
                 8,
                 "Keeps GenericIK updating normally for a short time after it leaves the screen to reduce visible snapping.");
+
+            bool profilerSettingExists = ProfilerToggle.ConfigHasEnableSetting(config.ConfigFilePath);
+            enableMonoProfiler = config.Bind(
+                "Profiler",
+                "Enable Mono Profiler",
+                ProfilerToggle.IsLoaderInstalledInPatchers(),
+                "On the next launch, load the separately installed BepInEx.Debug Mono Profiler. ROR-O runs normally when this is off or when the profiler is not installed. The switch does not take effect until the game is restarted.");
+            if (profilerSettingExists)
+            {
+                ProfilerToggle.Apply(enableMonoProfiler.Value);
+            }
+
+            enableMonoProfiler.SettingChanged += (_, __) => ProfilerToggle.Apply(enableMonoProfiler.Value);
+
+            RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
+            {
+                EnableDamageNumberLoadShedding = enableDamageNumberLoadShedding,
+                SoftParticleCap = softParticleCap,
+                HardParticleCap = hardParticleCap,
+                AbsoluteParticleCap = absoluteParticleCap,
+                SoftSpawnsPerFrame = softSpawnsPerFrame,
+                HardSpawnsPerFrame = hardSpawnsPerFrame,
+                AbsoluteSpawnsPerFrame = absoluteSpawnsPerFrame,
+                SoftPeakDamageFraction = softPeakDamageFraction,
+                HardPeakDamageFraction = hardPeakDamageFraction,
+                AbsolutePeakDamageFraction = absolutePeakDamageFraction,
+                SoftMinimumDamage = softMinimumDamage,
+                HardMinimumDamage = hardMinimumDamage,
+                AbsoluteMinimumDamage = absoluteMinimumDamage,
+                PeakDamageHalfLifeSeconds = peakDamageHalfLifeSeconds,
+                PreserveCriticalHits = preserveCriticalHits,
+                PreserveImportantColors = preserveImportantColors,
+                EnableDynamicBoneInvisibleThrottling = enableDynamicBoneInvisibleThrottling,
+                DynamicBoneInvisibleUpdateInterval = dynamicBoneInvisibleUpdateInterval,
+                DynamicBoneRecentlyVisibleGraceFrames = dynamicBoneRecentlyVisibleGraceFrames,
+                DynamicBoneVisibleMidDistance = dynamicBoneVisibleMidDistance,
+                DynamicBoneVisibleFarDistance = dynamicBoneVisibleFarDistance,
+                DynamicBoneVisibleMidUpdateInterval = dynamicBoneVisibleMidUpdateInterval,
+                DynamicBoneVisibleFarUpdateInterval = dynamicBoneVisibleFarUpdateInterval,
+                EnableGenericIkInvisibleThrottling = enableGenericIkInvisibleThrottling,
+                GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
+                GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
+                EnableMonoProfiler = enableMonoProfiler,
+            });
         }
     }
 
     [BepInPlugin(Modguid, ModName, ModVersion)]
+    [BepInDependency("com.rune580.riskofoptions", BepInDependency.DependencyFlags.SoftDependency)]
     public sealed class RORO : BaseUnityPlugin
     {
         public static ManualLogSource? GlobalLogger { get; private set; }
@@ -257,6 +305,7 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
+            gameObject.AddComponent<ProfilerDumpNotice>();
         }
     }
 }
