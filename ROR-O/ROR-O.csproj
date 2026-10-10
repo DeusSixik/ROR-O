@@ -1,16 +1,15 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+    <Import Project="obj\roro.paths.props" Condition="Exists('obj\roro.paths.props')" />
+    <Import Project="roro.user.props" Condition="Exists('roro.user.props') and '$(RoroPathsReady)' != 'true'" />
+
     <PropertyGroup>
-        <GameDir Condition="'$(GameDir)' == ''">G:\program\steam\steamapps\common\Risk of Rain 2</GameDir>
-        <ProfileDir Condition="'$(ProfileDir)' == ''">G:\TMP\ex\RiskOfRain2\profiles\ror-more-o</ProfileDir>
+        <DeployOnBuild Condition="'$(DeployOnBuild)' == ''">true</DeployOnBuild>
         <GameManagedDir>$(GameDir)\Risk of Rain 2_Data\Managed</GameManagedDir>
         <BepInExCoreDir>$(ProfileDir)\BepInEx\core</BepInExCoreDir>
-        <LookingGlassDll>$(ProfileDir)\BepInEx\plugins\DropPod-LookingGlass\LookingGlass\LookingGlass.dll</LookingGlassDll>
-        <DeployPluginDir>$(ProfileDir)\BepInEx\plugins\SDM-ROR_O\ror-o</DeployPluginDir>
-        <DeployOnBuild Condition="'$(DeployOnBuild)' == ''">true</DeployOnBuild>
     </PropertyGroup>
 
-    <Target Name="PackageThunderstore" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <Target Name="PackageThunderstore" AfterTargets="Build" Condition="'$(Configuration)' == 'Release' and '$(RoroPathsReady)' == 'true'">
         <PropertyGroup>
             <StagingDir>$(OutDir)Thunderstore_Staging\</StagingDir>
             <PluginDir>$(StagingDir)plugins\ror-o\</PluginDir>
@@ -42,7 +41,7 @@
         <Message Text="📦 Thunderstore ZIP created: $(ZipFileName)" Importance="high"/>
     </Target>
 
-    <Target Name="DeployToProfile" AfterTargets="Build" Condition="'$(DeployOnBuild)' == 'true'">
+    <Target Name="DeployToProfile" AfterTargets="Build" Condition="'$(DeployOnBuild)' == 'true' and '$(RoroPathsReady)' == 'true'">
         <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(DeployPluginDir)" />
         <Message Text="Deployed $(TargetFileName) to $(DeployPluginDir)" Importance="high"/>
     </Target>
@@ -58,6 +57,10 @@
             <LogicalName>ROR_O.icon.png</LogicalName>
         </EmbeddedResource>
     </ItemGroup>
+
+    <Target Name="CheckRoroPaths" BeforeTargets="ResolveAssemblyReferences" Condition="'$(GameDir)' == '' or '$(ProfileDir)' == ''">
+        <Error Text="ROR-O has no game or profile path yet. Run dotnet build so it can search, or set them in ROR-O/roro.user.props (see roro.user.props.example)." />
+    </Target>
 
     <ItemGroup>
         <Reference Include="0Harmony">
@@ -112,6 +115,7 @@
         </Reference>
         <Reference Include="mscorlib">
             <HintPath>$(GameManagedDir)\mscorlib.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="RoR2">
             <HintPath>$(GameManagedDir)\RoR2.dll</HintPath>
@@ -435,6 +439,9 @@
         <Reference Include="UnityEngine.XRModule">
             <HintPath>$(GameManagedDir)\UnityEngine.XRModule.dll</HintPath>
         </Reference>
+    </ItemGroup>
+
+    <ItemGroup>
         <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.2">
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
