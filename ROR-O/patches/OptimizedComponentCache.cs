@@ -5,6 +5,7 @@ using RoR2;
 using RoR2.Projectile;
 using UnityEngine;
 using UnityEngine.Networking;
+using ROR_O.Utilities;
 
 namespace ROR_O.patches
 {

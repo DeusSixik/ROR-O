@@ -7,6 +7,7 @@ using RoR2.UI;
 using UnityEngine;
 using PlatformID = RoR2.PlatformID;
 using static ROR_O.patches.OptimizeGetComponentPatchTools;
+using ROR_O.Utilities;
 
 namespace ROR_O.patches
 {
