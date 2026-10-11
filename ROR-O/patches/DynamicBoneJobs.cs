@@ -513,6 +513,24 @@ namespace ROR_O.patches
             EnsureCapacity(ref frames, Pending.Count);
 
             int frameCount = Time.frameCount;
+            int jobCandidates = 0;
+            for (int i = 0; i < Pending.Count; i++)
+            {
+                Slot slot = Pending[i].Slot;
+                if (slot.Bone != null && !slot.UseVanilla && slot.Particles.Count == slot.ParticleObjects.Length)
+                {
+                    jobCandidates++;
+                }
+            }
+
+            if (jobCandidates < MinBonesForWorkerThreads)
+            {
+                RunPendingOnMainThread();
+                Stats.InlineFrames++;
+                Stats.Bones += jobCandidates;
+                return;
+            }
+
             int jobCount = 0;
             for (int i = 0; i < Pending.Count; i++)
             {
@@ -632,22 +650,9 @@ namespace ROR_O.patches
                 OutFlags = outFlags,
             };
 
-            if (jobCount < MinBonesForWorkerThreads)
-            {
-                readJob.RunReadOnly(transforms);
-                for (int i = 0; i < jobCount; i++)
-                {
-                    simulateJob.Execute(i);
-                }
-
-                Stats.InlineFrames++;
-            }
-            else
-            {
-                JobHandle read = readJob.ScheduleReadOnly(transforms, 16);
-                simulateJob.Schedule(jobCount, 1, read).Complete();
-                Stats.WorkerFrames++;
-            }
+            JobHandle read = readJob.ScheduleReadOnly(transforms, 16);
+            simulateJob.Schedule(jobCount, 1, read).Complete();
+            Stats.WorkerFrames++;
 
             Stats.Bones += jobCount;
             for (int i = 0; i < jobCount; i++)

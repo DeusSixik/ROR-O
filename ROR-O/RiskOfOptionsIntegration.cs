@@ -9,6 +9,7 @@ namespace ROR_O
 {
     internal sealed class RiskOfOptionsCatalog
     {
+        public ConfigEntry<SettingsProfiles.Profile>? DamageNumbersProfile { get; set; }
         public ConfigEntry<bool>? EnableDamageNumberLoadShedding { get; set; }
         public ConfigEntry<int>? SoftParticleCap { get; set; }
         public ConfigEntry<int>? HardParticleCap { get; set; }
@@ -25,6 +26,7 @@ namespace ROR_O
         public ConfigEntry<float>? PeakDamageHalfLifeSeconds { get; set; }
         public ConfigEntry<bool>? PreserveCriticalHits { get; set; }
         public ConfigEntry<bool>? PreserveImportantColors { get; set; }
+        public ConfigEntry<SettingsProfiles.Profile>? DynamicBonesProfile { get; set; }
         public ConfigEntry<bool>? EnableDynamicBoneInvisibleThrottling { get; set; }
         public ConfigEntry<int>? DynamicBoneInvisibleUpdateInterval { get; set; }
         public ConfigEntry<int>? DynamicBoneRecentlyVisibleGraceFrames { get; set; }
@@ -33,6 +35,7 @@ namespace ROR_O
         public ConfigEntry<int>? DynamicBoneVisibleMidUpdateInterval { get; set; }
         public ConfigEntry<int>? DynamicBoneVisibleFarUpdateInterval { get; set; }
         public ConfigEntry<bool>? EnableDynamicBoneJobs { get; set; }
+        public ConfigEntry<SettingsProfiles.Profile>? GenericIkProfile { get; set; }
         public ConfigEntry<bool>? EnableGenericIkInvisibleThrottling { get; set; }
         public ConfigEntry<int>? GenericIkInvisibleUpdateInterval { get; set; }
         public ConfigEntry<int>? GenericIkRecentlyVisibleGraceFrames { get; set; }
@@ -77,6 +80,7 @@ namespace ROR_O
 
         private static void AddEntries(Menu menu, RiskOfOptionsCatalog catalog)
         {
+            menu.Choice(catalog.DamageNumbersProfile);
             Func<bool> damageNumbersDisabled = () => catalog.EnableDamageNumberLoadShedding?.Value != true;
             menu.CheckBox(catalog.EnableDamageNumberLoadShedding);
             menu.IntSlider(catalog.SoftParticleCap, 1, 800, damageNumbersDisabled);
@@ -95,6 +99,7 @@ namespace ROR_O
             menu.CheckBox(catalog.PreserveCriticalHits, damageNumbersDisabled);
             menu.CheckBox(catalog.PreserveImportantColors, damageNumbersDisabled);
 
+            menu.Choice(catalog.DynamicBonesProfile);
             Func<bool> dynamicBonesDisabled = () => catalog.EnableDynamicBoneInvisibleThrottling?.Value != true;
             menu.CheckBox(catalog.EnableDynamicBoneInvisibleThrottling);
             menu.IntSlider(catalog.DynamicBoneInvisibleUpdateInterval, 2, 30, dynamicBonesDisabled);
@@ -105,6 +110,7 @@ namespace ROR_O
             menu.IntSlider(catalog.DynamicBoneVisibleFarUpdateInterval, 1, 30, dynamicBonesDisabled);
             menu.CheckBox(catalog.EnableDynamicBoneJobs);
 
+            menu.Choice(catalog.GenericIkProfile);
             Func<bool> genericIkDisabled = () => catalog.EnableGenericIkInvisibleThrottling?.Value != true;
             menu.CheckBox(catalog.EnableGenericIkInvisibleThrottling);
             menu.IntSlider(catalog.GenericIkInvisibleUpdateInterval, 2, 30, genericIkDisabled);
@@ -174,6 +180,19 @@ namespace ROR_O
                 {
                     setIcon.Invoke(null, new object[] { icon });
                 }
+            }
+
+            public void Choice(ConfigEntryBase? entry)
+            {
+                if (entry == null)
+                {
+                    return;
+                }
+
+                object config = CreateConfig("RiskOfOptions.OptionConfigs.ChoiceConfig", entry, null);
+                Set(config, "name", entry.Definition.Key);
+                Set(config, "description", entry.Description.Description);
+                Add("RiskOfOptions.Options.ChoiceOption", entry, config);
             }
 
             public void CheckBox(ConfigEntry<bool>? entry, Func<bool>? disabledWhen = null)
