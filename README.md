@@ -2,7 +2,7 @@
 
 Performance optimization mod for Risk of Rain 2.
 
-`ROR-O` focuses on real hot paths found in Mono profiler captures instead of broad "magic FPS boost" claims. The mod reduces repeated UI work, trims heavy runtime systems when they are offscreen, and smooths out several expensive gameplay update loops.
+`ROR-O` focuses on real hot paths found in profiler captures instead of broad "magic FPS boost" claims. The mod reduces repeated UI work, trims heavy runtime systems when they are offscreen, and moves Steam traffic off the host frame.
 
 ## What it optimizes
 
@@ -14,17 +14,23 @@ Current optimization areas include:
   - survivor availability checks
 - Text / UI hot paths
   - repeated `TextMeshPro` text updates
-  - repeated `font`, `fontSize`, `alignment`, `alpha`, `maxVisibleCharacters`
-  - repeated `SetVerticesDirty`, `SetLayoutDirty`, `SetMaterialDirty`
-  - repeated `UISkinData.TextStyle.Apply(...)`
+  - chat, inventory, and scoreboard rebuilds that show the same result
+  - UI raycasts while the pointer stays still
+  - repeated text style changes
 - Damage numbers
   - load shedding under extreme combat load
-  - keeps important hits more visible through crit/color/peak-damage rules
+  - quality presets: Lossless, Performance, Potato
 - Dynamic bones
-  - throttles offscreen rigs
-  - throttles far visible rigs more conservatively
+  - throttles offscreen and distant rigs
+  - simulates busy frames on worker threads
+  - quality presets: Lossless, Performance, Potato
 - Generic IK (`GenericIK.dll`)
-  - throttles offscreen IK rigs with grace frames
+  - throttles offscreen IK rigs
+  - quality presets: Lossless, Performance, Potato
+- Steam networking
+  - packet send and receive off the main thread
+- Spawn
+  - warms monster and pickup prefabs at stage start
 - Cache-based gameplay hot path cleanup
   - `ChildLocator` / transform lookup caching
   - component access caching for selected hot loops
@@ -37,6 +43,7 @@ The mod was built by profiling real gameplay and fixing expensive paths one by o
 
 - reducing repeated UI rebuild work
 - reducing offscreen / far-away animation overhead
+- keeping Steam polling off the host frame
 - reducing waste from repeated menu and lobby refresh logic
 
 It is especially aimed at:
@@ -44,30 +51,26 @@ It is especially aimed at:
 - modded runs with lots of UI activity
 - scenes with many enemies or effects
 - long runs where animation systems and UI become expensive
+- multiplayer, where the host was spending frame time on Steam
 
 ## Important notes
 
 - This mod does **not** promise to fix every stutter source.
-- Risk of Rain 2 still has expensive systems such as networking, Addressables loading, spawning, and audio registration that can create spikes on their own.
-- Enemy spawning itself does **not** appear to use a universal reusable entity pool, so occasional spawn hitches can still happen.
+- Risk of Rain 2 still has expensive systems such as Addressables loading, spawning, and audio registration that can create spikes on their own.
+- Warming a prefab does not draw it, so the first time that monster appears on screen can still hitch.
 
 ## Installation
 
 ### Thunderstore / Mod Manager
 
-Install with:
-
-- `BepInExPack`
-- then install `ROR-O`
+Install `ROR-O` into a profile that already has BepInEx. BepInExPack is not required.
 
 ### Manual installation
 
-1. Install BepInEx for Risk of Rain 2
-2. Build or download `ROR-O.dll`
-3. Place it into:
+Place `ROR-O.dll` into:
 
 ```text
-BepInEx/plugins/
+BepInEx/plugins/ror-o/
 ```
 
 ## Configuration
@@ -83,101 +86,42 @@ Main sections currently exposed:
 - `[Damage Numbers]`
 - `[Dynamic Bones]`
 - `[Generic IK]`
+- `[Network]`
+- `[Spawns]`
+- `[Profiler]`
 
-## Damage Numbers presets
+`[Profiler]` includes an optional Hitch Watch and a switch for the separately installed Mono profiler.
 
-### Balance
+## Integrations
 
-```ini
-[Damage Numbers]
-Enable Load Shedding = true
-Soft Particle Cap = 112
-Hard Particle Cap = 176
-Absolute Particle Cap = 240
-Soft Spawns Per Frame = 20
-Hard Spawns Per Frame = 34
-Absolute Spawns Per Frame = 48
-Soft Peak Damage Fraction = 0.025
-Hard Peak Damage Fraction = 0.07
-Absolute Peak Damage Fraction = 0.14
-Soft Minimum Damage = 1
-Hard Minimum Damage = 3
-Absolute Minimum Damage = 6
-Peak Damage Half Life Seconds = 1.75
-Preserve Critical Hits = true
-Preserve Important Colors = true
+- Looking Glass
+- Risk of Options
+- Mono Profiler
+
+## Development
+
+Close the game before building. From the repository root:
+
+```text
+dotnet build ROR-O/ROR-O.csproj -c Debug
 ```
 
-### Performance
+The build finds the Steam install and profiles from r2modman, Thunderstore Mod Manager, or Gale. The first success writes gitignored `ROR-O/roro.user.props` and later builds reuse it. The profile used to compile must contain `LookingGlass.dll`. Players do not need that mod.
 
-```ini
-[Damage Numbers]
-Enable Load Shedding = true
-Soft Particle Cap = 80
-Hard Particle Cap = 128
-Absolute Particle Cap = 176
-Soft Spawns Per Frame = 12
-Hard Spawns Per Frame = 22
-Absolute Spawns Per Frame = 32
-Soft Peak Damage Fraction = 0.04
-Hard Peak Damage Fraction = 0.10
-Absolute Peak Damage Fraction = 0.20
-Soft Minimum Damage = 2
-Hard Minimum Damage = 5
-Absolute Minimum Damage = 10
-Peak Damage Half Life Seconds = 1.25
-Preserve Critical Hits = true
-Preserve Important Colors = true
+If several profiles are found:
+
+```text
+dotnet build ROR-O/ROR-O.csproj -c Debug -p:ProfileDir="D:\profiles\my-profile"
 ```
 
-## Dynamic Bones defaults
+A unique profile name is enough. Profiles outside AppData need `ProfileRoot`, or a copy of `ROR-O/roro.user.props.example`. Interactive choice: `powershell -File ROR-O/resolve-paths.ps1 -Ask`.
 
-```ini
-[Dynamic Bones]
-Enable Invisible Update Throttling = true
-Invisible Update Interval = 3
-Recently Visible Grace Frames = 12
-Visible Mid Distance = 30
-Visible Far Distance = 55
-Visible Mid Update Interval = 2
-Visible Far Update Interval = 3
-```
-
-## Generic IK defaults
-
-```ini
-[Generic IK]
-Enable Invisible Update Throttling = true
-Invisible Update Interval = 2
-Recently Visible Grace Frames = 8
-```
-
-## Compatibility
-
-- Built for BepInEx
-- Harmony-based runtime patches
-- Includes compatibility-focused optimization for `LookingGlass`
-- Designed to coexist with other gameplay mods, but conflicts are still possible if another mod patches the same hot methods aggressively
-
-## Development approach
-
-The optimization work was added incrementally across commits such as:
-
-- setup and initial patching infrastructure
-- LookingGlass compatibility optimization
-- hot path caching passes
-- menu / lobby / text optimizations
-- damage number optimization
-- Dynamic Bone optimization
-- Generic IK optimization
-
-This means the mod is intentionally a collection of targeted fixes rather than one giant rewrite.
+Debug copies `ROR-O.dll` into the profile. Release also writes `ROR-O/bin/Release/netstandard2.1/ROR_O-v1.0.4.zip`. Use `-p:DeployOnBuild=false` to skip the copy.
 
 ## Known limitations
 
 - Loading spikes related to Addressables can still happen
-- Spawn spikes can still happen when the game instantiates new enemies or world objects
-- Network-heavy runs can still be limited by Steam / UNet message handling
+- The first visible spawn of a monster can still hitch
 - Audio-heavy scenes can still be limited by `AkGameObj` / Wwise costs
 
 ## Source
