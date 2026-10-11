@@ -73,8 +73,13 @@ namespace ROR_O
         public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 2;
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 8;
         public static bool EnableMonoProfiler => enableMonoProfiler?.Value ?? false;
+        public static bool EnableThreadedSteamP2P => enableThreadedSteamP2P?.Value ?? true;
+        public static bool EnableDynamicBoneJobs => enableDynamicBoneJobs?.Value ?? true;
+
+        private static ConfigEntry<bool>? enableDynamicBoneJobs;
 
         private static ConfigEntry<bool>? enableMonoProfiler;
+        private static ConfigEntry<bool>? enableThreadedSteamP2P;
 
         public static void Bind(ConfigFile config)
         {
@@ -220,6 +225,12 @@ namespace ROR_O
                 3,
                 "When a visible DynamicBone rig is beyond the far distance, only run a full LateUpdate once every N frames.");
 
+            enableDynamicBoneJobs = config.Bind(
+                dynamicBonesSection,
+                "Multithreaded Simulation",
+                true,
+                "Simulates all DynamicBones that update in a frame together on Unity worker threads after LateUpdate, leaving only the final transform writes on the main thread. Takes effect immediately.");
+
             const string genericIkSection = "Generic IK";
 
             enableGenericIkInvisibleThrottling = config.Bind(
@@ -239,6 +250,12 @@ namespace ROR_O
                 "Recently Visible Grace Frames",
                 8,
                 "Keeps GenericIK updating normally for a short time after it leaves the screen to reduce visible snapping.");
+
+            enableThreadedSteamP2P = config.Bind(
+                "Network",
+                "Threaded Steam P2P",
+                true,
+                "Moves Steam P2P packet sends and reads off the main thread to a background thread. The packet format does not change, so it works with players who do not have ROR-O. Takes effect immediately.");
 
             bool profilerSettingExists = ProfilerToggle.ConfigHasEnableSetting(config.ConfigFilePath);
             enableMonoProfiler = config.Bind(
@@ -278,9 +295,11 @@ namespace ROR_O
                 DynamicBoneVisibleFarDistance = dynamicBoneVisibleFarDistance,
                 DynamicBoneVisibleMidUpdateInterval = dynamicBoneVisibleMidUpdateInterval,
                 DynamicBoneVisibleFarUpdateInterval = dynamicBoneVisibleFarUpdateInterval,
+                EnableDynamicBoneJobs = enableDynamicBoneJobs,
                 EnableGenericIkInvisibleThrottling = enableGenericIkInvisibleThrottling,
                 GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
                 GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
+                EnableThreadedSteamP2P = enableThreadedSteamP2P,
                 EnableMonoProfiler = enableMonoProfiler,
             });
         }
@@ -305,6 +324,7 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
+            patches.DynamicBoneJobs.Install();
             gameObject.AddComponent<ProfilerDumpNotice>();
         }
     }

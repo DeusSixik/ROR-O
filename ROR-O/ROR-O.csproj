@@ -50,6 +50,7 @@
         <TargetFramework>netstandard2.1</TargetFramework>
         <RootNamespace>ROR_O</RootNamespace>
         <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
     <ItemGroup>
@@ -96,6 +97,9 @@
         </Reference>
         <Reference Include="com.unity.multiplayer-hlapi.Runtime">
             <HintPath>$(GameManagedDir)\com.unity.multiplayer-hlapi.Runtime.dll</HintPath>
+        </Reference>
+        <Reference Include="Facepunch.Steamworks">
+            <HintPath>$(GameManagedDir)\Facepunch.Steamworks.dll</HintPath>
         </Reference>
         <Reference Include="HarmonyXInterop">
             <HintPath>$(BepInExCoreDir)\HarmonyXInterop.dll</HintPath>

@@ -32,9 +32,11 @@ namespace ROR_O
         public ConfigEntry<float>? DynamicBoneVisibleFarDistance { get; set; }
         public ConfigEntry<int>? DynamicBoneVisibleMidUpdateInterval { get; set; }
         public ConfigEntry<int>? DynamicBoneVisibleFarUpdateInterval { get; set; }
+        public ConfigEntry<bool>? EnableDynamicBoneJobs { get; set; }
         public ConfigEntry<bool>? EnableGenericIkInvisibleThrottling { get; set; }
         public ConfigEntry<int>? GenericIkInvisibleUpdateInterval { get; set; }
         public ConfigEntry<int>? GenericIkRecentlyVisibleGraceFrames { get; set; }
+        public ConfigEntry<bool>? EnableThreadedSteamP2P { get; set; }
         public ConfigEntry<bool>? EnableMonoProfiler { get; set; }
     }
 
@@ -62,7 +64,7 @@ namespace ROR_O
             try
             {
                 var menu = new Menu(assembly);
-                menu.SetDescription("Performance options for damage numbers, Dynamic Bones, and Generic IK. Those apply during play. The Mono Profiler switch applies on the next launch.");
+                menu.SetDescription("Performance options for damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. The Mono Profiler switch applies on the next launch.");
                 menu.SetIcon(LoadIcon());
                 AddEntries(menu, catalog);
                 RORO.GlobalLogger?.LogInfo("ROR-O settings were added to Risk of Options.");
@@ -101,11 +103,13 @@ namespace ROR_O
             menu.StepSlider(catalog.DynamicBoneVisibleFarDistance, 0f, 400f, 1f, "0", dynamicBonesDisabled);
             menu.IntSlider(catalog.DynamicBoneVisibleMidUpdateInterval, 1, 30, dynamicBonesDisabled);
             menu.IntSlider(catalog.DynamicBoneVisibleFarUpdateInterval, 1, 30, dynamicBonesDisabled);
+            menu.CheckBox(catalog.EnableDynamicBoneJobs);
 
             Func<bool> genericIkDisabled = () => catalog.EnableGenericIkInvisibleThrottling?.Value != true;
             menu.CheckBox(catalog.EnableGenericIkInvisibleThrottling);
             menu.IntSlider(catalog.GenericIkInvisibleUpdateInterval, 2, 30, genericIkDisabled);
             menu.IntSlider(catalog.GenericIkRecentlyVisibleGraceFrames, 0, 120, genericIkDisabled);
+            menu.CheckBox(catalog.EnableThreadedSteamP2P);
             menu.CheckBox(catalog.EnableMonoProfiler);
         }
 
