@@ -73,6 +73,21 @@ namespace ROR_O
         public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 2;
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 8;
         public static bool EnableMonoProfiler => enableMonoProfiler?.Value ?? false;
+        public static bool EnableHitchWatch => enableHitchWatch?.Value ?? false;
+
+        public static int HitchWatchTargetFps
+        {
+            get
+            {
+                int value = hitchWatchTargetFps?.Value ?? 60;
+                if (value < 30)
+                {
+                    return 30;
+                }
+
+                return value > 240 ? 240 : value;
+            }
+        }
         public static bool EnableThreadedSteamP2P => enableThreadedSteamP2P?.Value ?? true;
         public static bool EnableNetworkDebug => enableNetworkDebug?.Value ?? false;
         public static bool EnableDynamicBoneJobs => enableDynamicBoneJobs?.Value ?? true;
@@ -80,6 +95,8 @@ namespace ROR_O
         private static ConfigEntry<bool>? enableDynamicBoneJobs;
 
         private static ConfigEntry<bool>? enableMonoProfiler;
+        private static ConfigEntry<bool>? enableHitchWatch;
+        private static ConfigEntry<int>? hitchWatchTargetFps;
         private static ConfigEntry<bool>? enableThreadedSteamP2P;
         private static ConfigEntry<bool>? enableNetworkDebug;
         private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
@@ -317,6 +334,18 @@ namespace ROR_O
 
             enableMonoProfiler.SettingChanged += (_, __) => ProfilerToggle.Apply(enableMonoProfiler.Value);
 
+            enableHitchWatch = config.Bind(
+                "Profiler",
+                "Hitch Watch",
+                false,
+                "Records frame time without the Mono profiler. Reads Unity's own counters every frame and writes the slow tail (1% and 0.1% of CPU and render time) plus any 10 second stretch under the recent median or the target FPS. Applies immediately.");
+
+            hitchWatchTargetFps = config.Bind(
+                "Profiler",
+                "Hitch Watch Target FPS",
+                60,
+                "Playable frame rate. Hitch Watch marks a stretch when its average FPS stays under this, or under the recent median. 60 is a frame every 16.7 ms.");
+
             RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
             {
                 DamageNumbersProfile = damageNumbersProfile,
@@ -351,6 +380,8 @@ namespace ROR_O
                 GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
                 EnableThreadedSteamP2P = enableThreadedSteamP2P,
                 EnableNetworkDebug = enableNetworkDebug,
+                EnableHitchWatch = enableHitchWatch,
+                HitchWatchTargetFps = hitchWatchTargetFps,
                 EnableMonoProfiler = enableMonoProfiler,
             });
         }
@@ -377,6 +408,7 @@ namespace ROR_O
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
             patches.DynamicBoneJobs.Install();
             gameObject.AddComponent<ProfilerDumpNotice>();
+            gameObject.AddComponent<HitchWatch>();
             gameObject.AddComponent<patches.NetworkDebugDriver>();
         }
     }

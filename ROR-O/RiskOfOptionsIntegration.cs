@@ -41,6 +41,8 @@ namespace ROR_O
         public ConfigEntry<int>? GenericIkRecentlyVisibleGraceFrames { get; set; }
         public ConfigEntry<bool>? EnableThreadedSteamP2P { get; set; }
         public ConfigEntry<bool>? EnableNetworkDebug { get; set; }
+        public ConfigEntry<bool>? EnableHitchWatch { get; set; }
+        public ConfigEntry<int>? HitchWatchTargetFps { get; set; }
         public ConfigEntry<bool>? EnableMonoProfiler { get; set; }
     }
 
@@ -68,7 +70,7 @@ namespace ROR_O
             try
             {
                 var menu = new Menu(assembly);
-                menu.SetDescription("Performance options for damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. The Mono Profiler switch applies on the next launch.");
+                menu.SetDescription("Performance options for damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately. The Mono Profiler switch applies on the next launch.");
                 menu.SetIcon(LoadIcon());
                 AddEntries(menu, catalog);
                 RORO.GlobalLogger?.LogInfo("ROR-O settings were added to Risk of Options.");
@@ -118,6 +120,8 @@ namespace ROR_O
             menu.IntSlider(catalog.GenericIkRecentlyVisibleGraceFrames, 0, 120, genericIkDisabled);
             menu.CheckBox(catalog.EnableThreadedSteamP2P);
             menu.CheckBox(catalog.EnableNetworkDebug);
+            menu.CheckBox(catalog.EnableHitchWatch);
+            menu.IntSlider(catalog.HitchWatchTargetFps, 30, 240, () => catalog.EnableHitchWatch?.Value != true);
             menu.CheckBox(catalog.EnableMonoProfiler);
         }
 
