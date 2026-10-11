@@ -41,6 +41,7 @@ namespace ROR_O
         public ConfigEntry<int>? GenericIkRecentlyVisibleGraceFrames { get; set; }
         public ConfigEntry<bool>? EnableThreadedSteamP2P { get; set; }
         public ConfigEntry<bool>? EnableNetworkDebug { get; set; }
+        public ConfigEntry<bool>? EnableSpawnPrewarm { get; set; }
         public ConfigEntry<bool>? EnableHitchWatch { get; set; }
         public ConfigEntry<int>? HitchWatchTargetFps { get; set; }
         public ConfigEntry<bool>? EnableMonoProfiler { get; set; }
@@ -120,6 +121,7 @@ namespace ROR_O
             menu.IntSlider(catalog.GenericIkRecentlyVisibleGraceFrames, 0, 120, genericIkDisabled);
             menu.CheckBox(catalog.EnableThreadedSteamP2P);
             menu.CheckBox(catalog.EnableNetworkDebug);
+            menu.CheckBox(catalog.EnableSpawnPrewarm);
             menu.CheckBox(catalog.EnableHitchWatch);
             menu.IntSlider(catalog.HitchWatchTargetFps, 30, 240, () => catalog.EnableHitchWatch?.Value != true);
             menu.CheckBox(catalog.EnableMonoProfiler);

@@ -90,6 +90,7 @@ namespace ROR_O
         }
         public static bool EnableThreadedSteamP2P => enableThreadedSteamP2P?.Value ?? true;
         public static bool EnableNetworkDebug => enableNetworkDebug?.Value ?? false;
+        public static bool EnableSpawnPrewarm => enableSpawnPrewarm?.Value ?? true;
         public static bool EnableDynamicBoneJobs => enableDynamicBoneJobs?.Value ?? true;
 
         private static ConfigEntry<bool>? enableDynamicBoneJobs;
@@ -99,6 +100,7 @@ namespace ROR_O
         private static ConfigEntry<int>? hitchWatchTargetFps;
         private static ConfigEntry<bool>? enableThreadedSteamP2P;
         private static ConfigEntry<bool>? enableNetworkDebug;
+        private static ConfigEntry<bool>? enableSpawnPrewarm;
         private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? dynamicBonesProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? genericIkProfile;
@@ -315,6 +317,12 @@ namespace ROR_O
                 true,
                 "Moves Steam P2P packet sends and reads off the main thread to a background thread. The packet format does not change, so it works with players who do not have ROR-O. Takes effect immediately.");
 
+            enableSpawnPrewarm = config.Bind(
+                "Spawns",
+                "Prewarm Stage Spawns",
+                true,
+                "After a stage starts, creates each monster prefab from that stage and the pickup shell once, away from the map, then removes them. One prefab per frame, so the first real spawn is less likely to hitch. Takes effect on the next stage.");
+
             enableNetworkDebug = config.Bind(
                 "Network",
                 "Debug Overlay",
@@ -380,6 +388,7 @@ namespace ROR_O
                 GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
                 EnableThreadedSteamP2P = enableThreadedSteamP2P,
                 EnableNetworkDebug = enableNetworkDebug,
+                EnableSpawnPrewarm = enableSpawnPrewarm,
                 EnableHitchWatch = enableHitchWatch,
                 HitchWatchTargetFps = hitchWatchTargetFps,
                 EnableMonoProfiler = enableMonoProfiler,
@@ -409,6 +418,7 @@ namespace ROR_O
             patches.DynamicBoneJobs.Install();
             gameObject.AddComponent<ProfilerDumpNotice>();
             gameObject.AddComponent<HitchWatch>();
+            gameObject.AddComponent<SpawnPrewarm>();
             gameObject.AddComponent<patches.NetworkDebugDriver>();
         }
     }
