@@ -74,12 +74,14 @@ namespace ROR_O
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 8;
         public static bool EnableMonoProfiler => enableMonoProfiler?.Value ?? false;
         public static bool EnableThreadedSteamP2P => enableThreadedSteamP2P?.Value ?? true;
+        public static bool EnableNetworkDebug => enableNetworkDebug?.Value ?? false;
         public static bool EnableDynamicBoneJobs => enableDynamicBoneJobs?.Value ?? true;
 
         private static ConfigEntry<bool>? enableDynamicBoneJobs;
 
         private static ConfigEntry<bool>? enableMonoProfiler;
         private static ConfigEntry<bool>? enableThreadedSteamP2P;
+        private static ConfigEntry<bool>? enableNetworkDebug;
         private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? dynamicBonesProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? genericIkProfile;
@@ -296,6 +298,12 @@ namespace ROR_O
                 true,
                 "Moves Steam P2P packet sends and reads off the main thread to a background thread. The packet format does not change, so it works with players who do not have ROR-O. Takes effect immediately.");
 
+            enableNetworkDebug = config.Bind(
+                "Network",
+                "Debug Overlay",
+                false,
+                "Shows each player's Steam connection under their name in the lobby and on the ally card. The host measures every link. A client measures its own link to the host, and sees other players' links to the host only when the host also has ROR-O. A server without ROR-O is left unchanged.");
+
             bool profilerSettingExists = ProfilerToggle.ConfigHasEnableSetting(config.ConfigFilePath);
             enableMonoProfiler = config.Bind(
                 "Profiler",
@@ -342,6 +350,7 @@ namespace ROR_O
                 GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
                 GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
                 EnableThreadedSteamP2P = enableThreadedSteamP2P,
+                EnableNetworkDebug = enableNetworkDebug,
                 EnableMonoProfiler = enableMonoProfiler,
             });
         }
@@ -368,6 +377,7 @@ namespace ROR_O
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
             patches.DynamicBoneJobs.Install();
             gameObject.AddComponent<ProfilerDumpNotice>();
+            gameObject.AddComponent<patches.NetworkDebugDriver>();
         }
     }
 }
