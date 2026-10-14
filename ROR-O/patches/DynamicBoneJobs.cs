@@ -429,13 +429,12 @@ namespace ROR_O.patches
                     object particle = slot.Particles[k];
                     slot.ParticleObjects[k] = particle;
                     Transform transform = ParticleTransformRef!(particle);
-                    if (!ReferenceEquals(transform, null))
+                    if (!transform)
                     {
-                        if (transform == null)
-                        {
-                            slot.UseVanilla = true;
-                        }
-
+                        slot.UseVanilla = true;
+                    }
+                    else
+                    {
                         slot.ParticleTransforms[k] = transform;
                     }
                 }
@@ -695,7 +694,7 @@ namespace ROR_O.patches
                     ParticlePrevPositionRef!(particle) = state.PrevPosition;
 
                     Transform? transform = slot.ParticleTransforms[k];
-                    if (ReferenceEquals(transform, null))
+                    if (!transform)
                     {
                         continue;
                     }
@@ -704,12 +703,12 @@ namespace ROR_O.patches
                     {
                         if ((outFlags[start] & RotationChanged) != 0)
                         {
-                            transform.rotation = outRotation[start];
+                            transform!.rotation = outRotation[start];
                         }
                     }
                     else
                     {
-                        transform.SetPositionAndRotation(state.Position, outRotation[start + k]);
+                        transform!.SetPositionAndRotation(state.Position, outRotation[start + k]);
                     }
                 }
 

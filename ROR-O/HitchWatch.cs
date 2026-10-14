@@ -26,6 +26,7 @@ namespace ROR_O
         private const int ThresholdInterval = 120;
         private const float SummarySeconds = 10f;
         private const float LogSeconds = 30f;
+        private const float FileFlushSeconds = 15f;
         private const float HitchFlushSeconds = 0.5f;
         private const float StallMs = 100f;
         private const int NoiseUs = 2000;
@@ -131,6 +132,7 @@ namespace ROR_O
         private float summaryStart;
         private float logStart;
         private float hitchWindowStart;
+        private float nextFileFlush;
         private bool haveHitch;
         private int hitchRank;
         private string hitchReason = string.Empty;
@@ -229,6 +231,7 @@ namespace ROR_O
             summaryStart = startedAt;
             logStart = startedAt;
             hitchWindowStart = startedAt;
+            nextFileFlush = startedAt + FileFlushSeconds;
             ringWrite = 0;
             ringCount = 0;
             sinceThreshold = 0;
@@ -263,7 +266,7 @@ namespace ROR_O
 
             if (writer != null)
             {
-                writer.Flush();
+                FlushWriter();
                 writer.Dispose();
                 writer = null;
             }
@@ -295,6 +298,30 @@ namespace ROR_O
 
                 logWindow = default;
                 logStart = now;
+            }
+
+            if (writer != null && now >= nextFileFlush)
+            {
+                FlushWriter();
+                nextFileFlush = now + FileFlushSeconds;
+            }
+        }
+
+        private void FlushWriter()
+        {
+            if (writer == null || writeFailed)
+            {
+                return;
+            }
+
+            try
+            {
+                writer.Flush();
+            }
+            catch (IOException exception)
+            {
+                writeFailed = true;
+                RORO.GlobalLogger?.LogError($"Hitch watch stopped writing: {exception.Message}");
             }
         }
 
@@ -678,7 +705,6 @@ namespace ROR_O
             try
             {
                 writer.WriteLine(line.ToString());
-                writer.Flush();
             }
             catch (IOException exception)
             {
