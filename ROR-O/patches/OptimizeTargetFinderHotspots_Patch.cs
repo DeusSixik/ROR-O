@@ -95,45 +95,6 @@ namespace ROR_O.patches
         }
     }
 
-    [HarmonyPatch(typeof(ProjectileSteerTowardTarget), nameof(ProjectileSteerTowardTarget.FixedUpdate))]
-    public static class OptimizeProjectileSteerTowardTargetPatch
-    {
-        [HarmonyPrefix]
-        private static bool Prefix(ProjectileSteerTowardTarget __instance)
-        {
-            Transform? currentTarget = __instance.targetComponent.target;
-            if (currentTarget)
-            {
-                Vector3 targetVector = currentTarget.position - __instance.transform.position;
-                if (__instance.yAxisOnly)
-                {
-                    targetVector.y = 0f;
-                }
-
-                if (targetVector != Vector3.zero)
-                {
-                    __instance.transform.forward = Vector3.RotateTowards(
-                        __instance.transform.forward,
-                        targetVector,
-                        __instance.rotationSpeed * 0.017453292f * Time.fixedDeltaTime,
-                        0f);
-                }
-
-                if (__instance.increaseSpeedOverTime && !__instance._reachedMaxSpeed)
-                {
-                    __instance._rotationSpeed += __instance.rotationAddPerSecond * Time.fixedDeltaTime;
-                    if (__instance._rotationSpeed > __instance.maxRotationSpeed)
-                    {
-                        __instance._rotationSpeed = __instance.maxRotationSpeed;
-                        __instance._reachedMaxSpeed = true;
-                    }
-                }
-            }
-
-            return false;
-        }
-    }
-
     [HarmonyPatch(typeof(ProjectileStopOnTargetLoss), nameof(ProjectileStopOnTargetLoss.FixedUpdate))]
     public static class OptimizeProjectileStopOnTargetLossPatch
     {

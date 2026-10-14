@@ -72,6 +72,38 @@ namespace ROR_O
         public static bool EnableGenericIkInvisibleThrottling => enableGenericIkInvisibleThrottling?.Value ?? true;
         public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 2;
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 8;
+        public static bool EnableMonoProfiler => enableMonoProfiler?.Value ?? false;
+        public static bool EnableHitchWatch => enableHitchWatch?.Value ?? false;
+
+        public static int HitchWatchTargetFps
+        {
+            get
+            {
+                int value = hitchWatchTargetFps?.Value ?? 60;
+                if (value < 30)
+                {
+                    return 30;
+                }
+
+                return value > 240 ? 240 : value;
+            }
+        }
+        public static bool EnableThreadedSteamP2P => enableThreadedSteamP2P?.Value ?? true;
+        public static bool EnableNetworkDebug => enableNetworkDebug?.Value ?? false;
+        public static bool EnableSpawnPrewarm => enableSpawnPrewarm?.Value ?? true;
+        public static bool EnableDynamicBoneJobs => enableDynamicBoneJobs?.Value ?? true;
+
+        private static ConfigEntry<bool>? enableDynamicBoneJobs;
+
+        private static ConfigEntry<bool>? enableMonoProfiler;
+        private static ConfigEntry<bool>? enableHitchWatch;
+        private static ConfigEntry<int>? hitchWatchTargetFps;
+        private static ConfigEntry<bool>? enableThreadedSteamP2P;
+        private static ConfigEntry<bool>? enableNetworkDebug;
+        private static ConfigEntry<bool>? enableSpawnPrewarm;
+        private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
+        private static ConfigEntry<SettingsProfiles.Profile>? dynamicBonesProfile;
+        private static ConfigEntry<SettingsProfiles.Profile>? genericIkProfile;
 
         public static void Bind(ConfigFile config)
         {
@@ -173,6 +205,25 @@ namespace ROR_O
                 true,
                 "Always allow important color categories like heal and weak point through the load shedding filter.");
 
+            damageNumbersProfile = SettingsProfiles.Begin(config, damageNumbersSection);
+            SettingsProfiles.Add(enableDamageNumberLoadShedding, true, true, true);
+            SettingsProfiles.Add(softParticleCap, 256, 128, 48);
+            SettingsProfiles.Add(hardParticleCap, 384, 192, 96);
+            SettingsProfiles.Add(absoluteParticleCap, 512, 256, 144);
+            SettingsProfiles.Add(softSpawnsPerFrame, 48, 24, 12);
+            SettingsProfiles.Add(hardSpawnsPerFrame, 72, 40, 20);
+            SettingsProfiles.Add(absoluteSpawnsPerFrame, 96, 56, 32);
+            SettingsProfiles.Add(softPeakDamageFraction, 0.02f, 0.03f, 0.10f);
+            SettingsProfiles.Add(hardPeakDamageFraction, 0.05f, 0.08f, 0.22f);
+            SettingsProfiles.Add(absolutePeakDamageFraction, 0.10f, 0.16f, 0.40f);
+            SettingsProfiles.Add(softMinimumDamage, 1f, 1f, 3f);
+            SettingsProfiles.Add(hardMinimumDamage, 1f, 2f, 8f);
+            SettingsProfiles.Add(absoluteMinimumDamage, 2f, 4f, 18f);
+            SettingsProfiles.Add(peakDamageHalfLifeSeconds, 1.0f, 1.5f, 2.5f);
+            SettingsProfiles.Add(preserveCriticalHits, true, true, true);
+            SettingsProfiles.Add(preserveImportantColors, true, true, true);
+            SettingsProfiles.End();
+
             const string dynamicBonesSection = "Dynamic Bones";
 
             enableDynamicBoneInvisibleThrottling = config.Bind(
@@ -217,6 +268,23 @@ namespace ROR_O
                 3,
                 "When a visible DynamicBone rig is beyond the far distance, only run a full LateUpdate once every N frames.");
 
+            enableDynamicBoneJobs = config.Bind(
+                dynamicBonesSection,
+                "Multithreaded Simulation",
+                true,
+                "Simulates all DynamicBones that update in a frame together on Unity worker threads after LateUpdate, leaving only the final transform writes on the main thread. Takes effect immediately.");
+
+            dynamicBonesProfile = SettingsProfiles.Begin(config, dynamicBonesSection);
+            SettingsProfiles.Add(enableDynamicBoneInvisibleThrottling, true, true, true);
+            SettingsProfiles.Add(dynamicBoneInvisibleUpdateInterval, 6, 3, 10);
+            SettingsProfiles.Add(dynamicBoneRecentlyVisibleGraceFrames, 18, 12, 4);
+            SettingsProfiles.Add(dynamicBoneVisibleMidDistance, 80f, 30f, 22f);
+            SettingsProfiles.Add(dynamicBoneVisibleFarDistance, 130f, 55f, 45f);
+            SettingsProfiles.Add(dynamicBoneVisibleMidUpdateInterval, 1, 2, 3);
+            SettingsProfiles.Add(dynamicBoneVisibleFarUpdateInterval, 2, 3, 5);
+            SettingsProfiles.Add(enableDynamicBoneJobs, true, true, true);
+            SettingsProfiles.End();
+
             const string genericIkSection = "Generic IK";
 
             enableGenericIkInvisibleThrottling = config.Bind(
@@ -236,17 +304,107 @@ namespace ROR_O
                 "Recently Visible Grace Frames",
                 8,
                 "Keeps GenericIK updating normally for a short time after it leaves the screen to reduce visible snapping.");
+
+            genericIkProfile = SettingsProfiles.Begin(config, genericIkSection);
+            SettingsProfiles.Add(enableGenericIkInvisibleThrottling, true, true, true);
+            SettingsProfiles.Add(genericIkInvisibleUpdateInterval, 2, 2, 6);
+            SettingsProfiles.Add(genericIkRecentlyVisibleGraceFrames, 20, 8, 3);
+            SettingsProfiles.End();
+
+            enableThreadedSteamP2P = config.Bind(
+                "Network",
+                "Threaded Steam P2P",
+                true,
+                "Moves Steam P2P packet sends and reads off the main thread to a background thread. The packet format does not change, so it works with players who do not have ROR-O. Takes effect immediately.");
+
+            enableSpawnPrewarm = config.Bind(
+                "Spawns",
+                "Prewarm Stage Spawns",
+                true,
+                "After a stage starts, creates each monster prefab from that stage and the pickup shell once, away from the map, then removes them. One prefab per frame, so the first real spawn is less likely to hitch. Takes effect on the next stage.");
+
+            enableNetworkDebug = config.Bind(
+                "Network",
+                "Debug Overlay",
+                false,
+                "Shows each player's Steam connection under their name in the lobby and on the ally card. The host measures every link. A client measures its own link to the host, and sees other players' links to the host only when the host also has ROR-O. A server without ROR-O is left unchanged.");
+
+            bool profilerSettingExists = ProfilerToggle.ConfigHasEnableSetting(config.ConfigFilePath);
+            enableMonoProfiler = config.Bind(
+                "Profiler",
+                "Enable Mono Profiler",
+                ProfilerToggle.IsLoaderInstalledInPatchers(),
+                "On the next launch, load the separately installed BepInEx.Debug Mono Profiler. ROR-O runs normally when this is off or when the profiler is not installed. The switch does not take effect until the game is restarted.");
+            if (profilerSettingExists)
+            {
+                ProfilerToggle.Apply(enableMonoProfiler.Value);
+            }
+
+            enableMonoProfiler.SettingChanged += (_, __) => ProfilerToggle.Apply(enableMonoProfiler.Value);
+
+            enableHitchWatch = config.Bind(
+                "Profiler",
+                "Hitch Watch",
+                false,
+                "Records frame time without the Mono profiler. Reads Unity's own counters every frame and writes the slow tail (1% and 0.1% of CPU and render time) plus any 10 second stretch under the recent median or the target FPS. Applies immediately.");
+
+            hitchWatchTargetFps = config.Bind(
+                "Profiler",
+                "Hitch Watch Target FPS",
+                60,
+                "Playable frame rate. Hitch Watch marks a stretch when its average FPS stays under this, or under the recent median. 60 is a frame every 16.7 ms.");
+
+            RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
+            {
+                DamageNumbersProfile = damageNumbersProfile,
+                EnableDamageNumberLoadShedding = enableDamageNumberLoadShedding,
+                SoftParticleCap = softParticleCap,
+                HardParticleCap = hardParticleCap,
+                AbsoluteParticleCap = absoluteParticleCap,
+                SoftSpawnsPerFrame = softSpawnsPerFrame,
+                HardSpawnsPerFrame = hardSpawnsPerFrame,
+                AbsoluteSpawnsPerFrame = absoluteSpawnsPerFrame,
+                SoftPeakDamageFraction = softPeakDamageFraction,
+                HardPeakDamageFraction = hardPeakDamageFraction,
+                AbsolutePeakDamageFraction = absolutePeakDamageFraction,
+                SoftMinimumDamage = softMinimumDamage,
+                HardMinimumDamage = hardMinimumDamage,
+                AbsoluteMinimumDamage = absoluteMinimumDamage,
+                PeakDamageHalfLifeSeconds = peakDamageHalfLifeSeconds,
+                PreserveCriticalHits = preserveCriticalHits,
+                PreserveImportantColors = preserveImportantColors,
+                DynamicBonesProfile = dynamicBonesProfile,
+                EnableDynamicBoneInvisibleThrottling = enableDynamicBoneInvisibleThrottling,
+                DynamicBoneInvisibleUpdateInterval = dynamicBoneInvisibleUpdateInterval,
+                DynamicBoneRecentlyVisibleGraceFrames = dynamicBoneRecentlyVisibleGraceFrames,
+                DynamicBoneVisibleMidDistance = dynamicBoneVisibleMidDistance,
+                DynamicBoneVisibleFarDistance = dynamicBoneVisibleFarDistance,
+                DynamicBoneVisibleMidUpdateInterval = dynamicBoneVisibleMidUpdateInterval,
+                DynamicBoneVisibleFarUpdateInterval = dynamicBoneVisibleFarUpdateInterval,
+                EnableDynamicBoneJobs = enableDynamicBoneJobs,
+                GenericIkProfile = genericIkProfile,
+                EnableGenericIkInvisibleThrottling = enableGenericIkInvisibleThrottling,
+                GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
+                GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
+                EnableThreadedSteamP2P = enableThreadedSteamP2P,
+                EnableNetworkDebug = enableNetworkDebug,
+                EnableSpawnPrewarm = enableSpawnPrewarm,
+                EnableHitchWatch = enableHitchWatch,
+                HitchWatchTargetFps = hitchWatchTargetFps,
+                EnableMonoProfiler = enableMonoProfiler,
+            });
         }
     }
 
     [BepInPlugin(Modguid, ModName, ModVersion)]
+    [BepInDependency("com.rune580.riskofoptions", BepInDependency.DependencyFlags.SoftDependency)]
     public sealed class RORO : BaseUnityPlugin
     {
         public static ManualLogSource? GlobalLogger { get; private set; }
 
         private const string Modguid = "net.sixik.plugin.roro";
         private const string ModName = "ROR-O";
-        private const string ModVersion = "1.0.2";
+        private const string ModVersion = "1.0.4";
 
         private void Awake()
         {
@@ -257,6 +415,11 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
+            patches.DynamicBoneJobs.Install();
+            gameObject.AddComponent<ProfilerDumpNotice>();
+            gameObject.AddComponent<HitchWatch>();
+            gameObject.AddComponent<SpawnPrewarm>();
+            gameObject.AddComponent<patches.NetworkDebugDriver>();
         }
     }
 }
