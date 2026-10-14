@@ -25,10 +25,6 @@ namespace ROR_O.patches
         [return: MarshalAs(UnmanagedType.I1)]
         public static extern bool ReadP2PPacket(IntPtr steamNetworking, IntPtr destination, uint destinationSize, out uint messageSize, out ulong steamIdRemote, int channel);
 
-        [DllImport(Library, EntryPoint = "SteamAPI_ISteamNetworking_AcceptP2PSessionWithUser")]
-        [return: MarshalAs(UnmanagedType.I1)]
-        public static extern bool AcceptP2PSessionWithUser(IntPtr steamNetworking, ulong steamIdRemote);
-
         [DllImport(Library, EntryPoint = "SteamAPI_ISteamNetworking_CloseP2PSessionWithUser")]
         [return: MarshalAs(UnmanagedType.I1)]
         public static extern bool CloseP2PSessionWithUser(IntPtr steamNetworking, ulong steamIdRemote);
@@ -57,7 +53,6 @@ namespace ROR_O.patches
         {
             Send,
             Close,
-            Accept,
         }
 
         private struct Command
@@ -87,6 +82,8 @@ namespace ROR_O.patches
         private static readonly FieldInfo? NativeNetworkingField = AccessTools.Field(typeof(Networking), "networking");
 
         private static bool bindingFailed;
+        private static bool threadedSteamWasEnabled;
+        private static int directCallDepth;
 
         public static SteamP2PWorker? Active { get; private set; }
 
@@ -132,13 +129,37 @@ namespace ROR_O.patches
             return Active != null && ReferenceEquals(Active.owner, networking);
         }
 
+        // Steam runs the session-request callback on the main thread and expects Close, the first reply, and Accept
+        // to finish before that callback returns. Those calls must not wait on this thread.
+        public static bool DirectCalls => directCallDepth > 0;
+
+        public static void BeginDirectCalls()
+        {
+            directCallDepth++;
+        }
+
+        public static void EndDirectCalls()
+        {
+            if (directCallDepth > 0)
+            {
+                directCallDepth--;
+            }
+        }
+
         // Called from Networking.Update on the main thread. Returns true when the worker owns this interface.
         public static bool TryDispatch(Networking networking, List<int> currentListenChannels)
         {
             SteamP2PWorker? worker = Active;
             if (worker != null && !ReferenceEquals(worker.owner, networking))
             {
-                return false;
+                // Server networking ticks beside the client. Only a replaced client interface should drop the old thread.
+                if (Client.Instance == null || !ReferenceEquals(Client.Instance.Networking, networking))
+                {
+                    return false;
+                }
+
+                ReleaseBinding(dispatchRemaining: true);
+                worker = null;
             }
 
             if (worker == null)
@@ -185,10 +206,24 @@ namespace ROR_O.patches
             worker.Stop(dispatchRemaining);
         }
 
+        // A new Steam interface, a disposed one, or turning the setting back on must not keep a stale pointer.
+        public static void ReleaseBinding(bool dispatchRemaining)
+        {
+            StopActive(dispatchRemaining);
+            bindingFailed = false;
+        }
+
         private static bool ShouldBind(Networking networking)
         {
+            bool enabled = ROROConfig.EnableThreadedSteamP2P;
+            if (enabled && !threadedSteamWasEnabled)
+            {
+                bindingFailed = false;
+            }
+
+            threadedSteamWasEnabled = enabled;
             return !bindingFailed
-                && ROROConfig.EnableThreadedSteamP2P
+                && enabled
                 && networking.OnP2PData != null
                 && Client.Instance != null
                 && ReferenceEquals(Client.Instance.Networking, networking);
@@ -268,11 +303,6 @@ namespace ROR_O.patches
         public void EnqueueClose(ulong steamId)
         {
             Enqueue(new Command { Kind = CommandKind.Close, SteamId = steamId });
-        }
-
-        public void EnqueueAccept(ulong steamId)
-        {
-            Enqueue(new Command { Kind = CommandKind.Accept, SteamId = steamId });
         }
 
         private void Enqueue(Command command)
@@ -476,9 +506,6 @@ namespace ROR_O.patches
                     case CommandKind.Close:
                         DropBlockedPeer(command.SteamId);
                         SteamP2PNative.CloseP2PSessionWithUser(steamNetworking, command.SteamId);
-                        break;
-                    case CommandKind.Accept:
-                        SteamP2PNative.AcceptP2PSessionWithUser(steamNetworking, command.SteamId);
                         break;
                 }
             }

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Reflection;
 using Facepunch.Steamworks;
 using HarmonyLib;
 using RoR2;
@@ -96,6 +95,11 @@ namespace ROR_O.patches
             int nChannel,
             ref bool __result)
         {
+            if (SteamP2PWorker.DirectCalls)
+            {
+                return true;
+            }
+
             SteamP2PWorker? worker = SteamP2PWorker.Active;
             if (worker == null || !SteamP2PWorker.IsBoundTo(__instance))
             {
@@ -113,6 +117,11 @@ namespace ROR_O.patches
     {
         private static bool Prefix(Networking __instance, ulong steamId, ref bool __result)
         {
+            if (SteamP2PWorker.DirectCalls)
+            {
+                return true;
+            }
+
             SteamP2PWorker? worker = SteamP2PWorker.Active;
             if (worker == null || !SteamP2PWorker.IsBoundTo(__instance))
             {
@@ -130,6 +139,11 @@ namespace ROR_O.patches
     {
         private static bool Prefix(Networking __instance, ulong steamId)
         {
+            if (SteamP2PWorker.DirectCalls)
+            {
+                return true;
+            }
+
             SteamP2PWorker? worker = SteamP2PWorker.Active;
             if (worker == null || !SteamP2PWorker.IsBoundTo(__instance))
             {
@@ -144,35 +158,24 @@ namespace ROR_O.patches
     [HarmonyPatch(typeof(Networking), "onP2PConnectionRequest")]
     public static class RouteSteamP2PSessionRequestPatch
     {
-        private static FieldInfo? steamIdRemoteField;
-
-        // Vanilla accepts right inside the callback, after OnIncomingConnection has already queued a session close and
-        // the first reply; the accept has to wait behind them in the worker queue.
-        private static bool Prefix(Networking __instance, object[] __args)
+        // Joining creates the connection inside this callback. That constructor closes any stale session and sends
+        // the first reply, and Facepunch accepts only after OnIncomingConnection returns. Running those calls later
+        // on the I/O thread lets the peer connect twice, so the second AddPlayer hits a connection that is already ready.
+        private static void Prefix(Networking __instance, ref bool __state)
         {
-            SteamP2PWorker? worker = SteamP2PWorker.Active;
-            if (worker == null || !SteamP2PWorker.IsBoundTo(__instance) || __args.Length == 0 || __args[0] == null)
+            __state = SteamP2PWorker.Active != null && SteamP2PWorker.IsBoundTo(__instance);
+            if (__state)
             {
-                return true;
+                SteamP2PWorker.BeginDirectCalls();
             }
+        }
 
-            steamIdRemoteField ??= AccessTools.Field(__args[0].GetType(), "SteamIDRemote");
-            if (steamIdRemoteField == null || !(steamIdRemoteField.GetValue(__args[0]) is ulong steamId))
+        private static void Postfix(bool __state)
+        {
+            if (__state)
             {
-                return true;
+                SteamP2PWorker.EndDirectCalls();
             }
-
-            bool accept = __instance.OnIncomingConnection != null && __instance.OnIncomingConnection(steamId);
-            if (accept)
-            {
-                worker.EnqueueAccept(steamId);
-            }
-            else
-            {
-                worker.EnqueueClose(steamId);
-            }
-
-            return false;
         }
     }
 
@@ -183,7 +186,7 @@ namespace ROR_O.patches
         {
             if (SteamP2PWorker.IsBoundTo(__instance))
             {
-                SteamP2PWorker.StopActive(dispatchRemaining: false);
+                SteamP2PWorker.ReleaseBinding(dispatchRemaining: false);
             }
         }
     }
