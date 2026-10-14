@@ -1,0 +1,24 @@
+<Project>
+  <!--
+    Game and profile paths are unknown while this file is being evaluated.
+    Search first, write obj/roro.paths.props, then build again in the same
+    dotnet invocation so the references see real HintPaths.
+  -->
+  <PropertyGroup Condition="'$(RoroPathsReady)' != 'true'">
+    <BuildDependsOn>BootstrapRoroPaths</BuildDependsOn>
+    <RebuildDependsOn>BootstrapRoroPaths</RebuildDependsOn>
+  </PropertyGroup>
+
+  <Target Name="BootstrapRoroPaths">
+    <PropertyGroup>
+      <_RoroProps>$(MSBuildThisFileDirectory)obj\roro.paths.props</_RoroProps>
+      <_RoroScript>$(MSBuildThisFileDirectory)resolve-paths.ps1</_RoroScript>
+    </PropertyGroup>
+    <MakeDir Directories="$(MSBuildThisFileDirectory)obj" />
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(_RoroScript)&quot; -GameDir &quot;$(GameDir)&quot; -ProfileDir &quot;$(ProfileDir)&quot; -ProfileRoot &quot;$(ProfileRoot)&quot; -OutFile &quot;$(_RoroProps)&quot;" />
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Build"
+             RemoveProperties="GameDir;ProfileDir;LookingGlassDll;DeployPluginDir"
+             Properties="RoroPathsReady=true;Configuration=$(Configuration);DeployOnBuild=$(DeployOnBuild)" />
+  </Target>
+</Project>

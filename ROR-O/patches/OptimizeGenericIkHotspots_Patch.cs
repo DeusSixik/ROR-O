@@ -1,6 +1,5 @@
 using System;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using HarmonyLib;
 using UnityEngine;
 
@@ -21,8 +20,8 @@ namespace ROR_O.patches
         private static readonly FieldInfo? AnimatorField =
             InverseKinematicsType != null ? AccessTools.Field(InverseKinematicsType, "animator") : null;
 
-        private static readonly ConditionalWeakTable<Component, GenericIkState> StateByIk =
-            new ConditionalWeakTable<Component, GenericIkState>();
+        private static readonly FixedConditionalWeakTable<Component, GenericIkState> StateByIk =
+            new FixedConditionalWeakTable<Component, GenericIkState>();
 
         private static bool Prepare()
         {
