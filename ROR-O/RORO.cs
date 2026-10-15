@@ -72,7 +72,9 @@ namespace ROR_O
         public static bool EnableGenericIkInvisibleThrottling => enableGenericIkInvisibleThrottling?.Value ?? true;
         public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 2;
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 8;
+        public static bool EnableSpawnPrewarm => enableSpawnPrewarm?.Value ?? true;
 
+        private static ConfigEntry<bool>? enableSpawnPrewarm;
         private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? dynamicBonesProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? genericIkProfile;
@@ -276,6 +278,12 @@ namespace ROR_O
             SettingsProfiles.Add(genericIkRecentlyVisibleGraceFrames, 20, 8, 3);
             SettingsProfiles.End();
 
+            enableSpawnPrewarm = config.Bind(
+                "Spawns",
+                "Prewarm Stage Spawns",
+                true,
+                "After a stage starts, creates each monster prefab from that stage and the pickup shell once, away from the map, then removes them. One prefab per frame, so the first real spawn is less likely to hitch. Takes effect on the next stage.");
+
             RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
             {
                 DamageNumbersProfile = damageNumbersProfile,
@@ -307,6 +315,7 @@ namespace ROR_O
                 EnableGenericIkInvisibleThrottling = enableGenericIkInvisibleThrottling,
                 GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
                 GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
+                EnableSpawnPrewarm = enableSpawnPrewarm,
             });
         }
     }
@@ -330,6 +339,7 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
+            gameObject.AddComponent<SpawnPrewarm>();
         }
     }
 }
