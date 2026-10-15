@@ -72,6 +72,12 @@ namespace ROR_O
         public static bool EnableGenericIkInvisibleThrottling => enableGenericIkInvisibleThrottling?.Value ?? true;
         public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 2;
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 8;
+        public static bool EnableSpawnPrewarm => enableSpawnPrewarm?.Value ?? true;
+
+        private static ConfigEntry<bool>? enableSpawnPrewarm;
+        private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
+        private static ConfigEntry<SettingsProfiles.Profile>? dynamicBonesProfile;
+        private static ConfigEntry<SettingsProfiles.Profile>? genericIkProfile;
 
         public static void Bind(ConfigFile config)
         {
@@ -173,6 +179,25 @@ namespace ROR_O
                 true,
                 "Always allow important color categories like heal and weak point through the load shedding filter.");
 
+            damageNumbersProfile = SettingsProfiles.Begin(config, damageNumbersSection);
+            SettingsProfiles.Add(enableDamageNumberLoadShedding, true, true, true);
+            SettingsProfiles.Add(softParticleCap, 256, 128, 48);
+            SettingsProfiles.Add(hardParticleCap, 384, 192, 96);
+            SettingsProfiles.Add(absoluteParticleCap, 512, 256, 144);
+            SettingsProfiles.Add(softSpawnsPerFrame, 48, 24, 12);
+            SettingsProfiles.Add(hardSpawnsPerFrame, 72, 40, 20);
+            SettingsProfiles.Add(absoluteSpawnsPerFrame, 96, 56, 32);
+            SettingsProfiles.Add(softPeakDamageFraction, 0.02f, 0.03f, 0.10f);
+            SettingsProfiles.Add(hardPeakDamageFraction, 0.05f, 0.08f, 0.22f);
+            SettingsProfiles.Add(absolutePeakDamageFraction, 0.10f, 0.16f, 0.40f);
+            SettingsProfiles.Add(softMinimumDamage, 1f, 1f, 3f);
+            SettingsProfiles.Add(hardMinimumDamage, 1f, 2f, 8f);
+            SettingsProfiles.Add(absoluteMinimumDamage, 2f, 4f, 18f);
+            SettingsProfiles.Add(peakDamageHalfLifeSeconds, 1.0f, 1.5f, 2.5f);
+            SettingsProfiles.Add(preserveCriticalHits, true, true, true);
+            SettingsProfiles.Add(preserveImportantColors, true, true, true);
+            SettingsProfiles.End();
+
             const string dynamicBonesSection = "Dynamic Bones";
 
             enableDynamicBoneInvisibleThrottling = config.Bind(
@@ -217,6 +242,16 @@ namespace ROR_O
                 3,
                 "When a visible DynamicBone rig is beyond the far distance, only run a full LateUpdate once every N frames.");
 
+            dynamicBonesProfile = SettingsProfiles.Begin(config, dynamicBonesSection);
+            SettingsProfiles.Add(enableDynamicBoneInvisibleThrottling, true, true, true);
+            SettingsProfiles.Add(dynamicBoneInvisibleUpdateInterval, 6, 3, 10);
+            SettingsProfiles.Add(dynamicBoneRecentlyVisibleGraceFrames, 18, 12, 4);
+            SettingsProfiles.Add(dynamicBoneVisibleMidDistance, 80f, 30f, 22f);
+            SettingsProfiles.Add(dynamicBoneVisibleFarDistance, 130f, 55f, 45f);
+            SettingsProfiles.Add(dynamicBoneVisibleMidUpdateInterval, 1, 2, 3);
+            SettingsProfiles.Add(dynamicBoneVisibleFarUpdateInterval, 2, 3, 5);
+            SettingsProfiles.End();
+
             const string genericIkSection = "Generic IK";
 
             enableGenericIkInvisibleThrottling = config.Bind(
@@ -236,17 +271,64 @@ namespace ROR_O
                 "Recently Visible Grace Frames",
                 8,
                 "Keeps GenericIK updating normally for a short time after it leaves the screen to reduce visible snapping.");
+
+            genericIkProfile = SettingsProfiles.Begin(config, genericIkSection);
+            SettingsProfiles.Add(enableGenericIkInvisibleThrottling, true, true, true);
+            SettingsProfiles.Add(genericIkInvisibleUpdateInterval, 2, 2, 6);
+            SettingsProfiles.Add(genericIkRecentlyVisibleGraceFrames, 20, 8, 3);
+            SettingsProfiles.End();
+
+            enableSpawnPrewarm = config.Bind(
+                "Spawns",
+                "Prewarm Stage Spawns",
+                true,
+                "After a stage starts, creates each monster prefab from that stage and the pickup shell once, away from the map, then removes them. One prefab per frame, so the first real spawn is less likely to hitch. Takes effect on the next stage.");
+
+            RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
+            {
+                DamageNumbersProfile = damageNumbersProfile,
+                EnableDamageNumberLoadShedding = enableDamageNumberLoadShedding,
+                SoftParticleCap = softParticleCap,
+                HardParticleCap = hardParticleCap,
+                AbsoluteParticleCap = absoluteParticleCap,
+                SoftSpawnsPerFrame = softSpawnsPerFrame,
+                HardSpawnsPerFrame = hardSpawnsPerFrame,
+                AbsoluteSpawnsPerFrame = absoluteSpawnsPerFrame,
+                SoftPeakDamageFraction = softPeakDamageFraction,
+                HardPeakDamageFraction = hardPeakDamageFraction,
+                AbsolutePeakDamageFraction = absolutePeakDamageFraction,
+                SoftMinimumDamage = softMinimumDamage,
+                HardMinimumDamage = hardMinimumDamage,
+                AbsoluteMinimumDamage = absoluteMinimumDamage,
+                PeakDamageHalfLifeSeconds = peakDamageHalfLifeSeconds,
+                PreserveCriticalHits = preserveCriticalHits,
+                PreserveImportantColors = preserveImportantColors,
+                DynamicBonesProfile = dynamicBonesProfile,
+                EnableDynamicBoneInvisibleThrottling = enableDynamicBoneInvisibleThrottling,
+                DynamicBoneInvisibleUpdateInterval = dynamicBoneInvisibleUpdateInterval,
+                DynamicBoneRecentlyVisibleGraceFrames = dynamicBoneRecentlyVisibleGraceFrames,
+                DynamicBoneVisibleMidDistance = dynamicBoneVisibleMidDistance,
+                DynamicBoneVisibleFarDistance = dynamicBoneVisibleFarDistance,
+                DynamicBoneVisibleMidUpdateInterval = dynamicBoneVisibleMidUpdateInterval,
+                DynamicBoneVisibleFarUpdateInterval = dynamicBoneVisibleFarUpdateInterval,
+                GenericIkProfile = genericIkProfile,
+                EnableGenericIkInvisibleThrottling = enableGenericIkInvisibleThrottling,
+                GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
+                GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
+                EnableSpawnPrewarm = enableSpawnPrewarm,
+            });
         }
     }
 
     [BepInPlugin(Modguid, ModName, ModVersion)]
+    [BepInDependency("com.rune580.riskofoptions", BepInDependency.DependencyFlags.SoftDependency)]
     public sealed class RORO : BaseUnityPlugin
     {
         public static ManualLogSource? GlobalLogger { get; private set; }
 
         private const string Modguid = "net.sixik.plugin.roro";
         private const string ModName = "ROR-O";
-        private const string ModVersion = "1.0.2";
+        private const string ModVersion = "1.0.4";
 
         private void Awake()
         {
@@ -257,6 +339,7 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
+            gameObject.AddComponent<SpawnPrewarm>();
         }
     }
 }
