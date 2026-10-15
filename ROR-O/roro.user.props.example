@@ -1,0 +1,20 @@
+<Project>
+  <!--
+    Copy to roro.user.props in this folder. That copy is gitignored.
+    A plain "dotnet build" searches Steam and the usual r2modman / Thunderstore folders.
+    The first successful build writes roro.user.props, and later builds reuse it.
+    If several profiles are found and none was chosen yet, the build stops and lists them:
+      dotnet build -p:ProfileDir="D:\profiles\my-profile"
+    ProfileDir may be the profile folder name when that name is unique.
+    Set ProfileRoot when the mod manager stores profiles outside AppData.
+    Or run: powershell -File ROR-O\resolve-paths.ps1 -Ask
+    That writes roro.user.props so later builds reuse the choice.
+  -->
+  <PropertyGroup>
+    <GameDir></GameDir>
+    <!-- Folder that contains the mod-manager profiles, when it is not in the default AppData location. -->
+    <ProfileRoot></ProfileRoot>
+    <ProfileDir></ProfileDir>
+    <DeployOnBuild>true</DeployOnBuild>
+  </PropertyGroup>
+</Project>
