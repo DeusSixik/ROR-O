@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
+using BepInEx.Configuration;
 using Facepunch.Steamworks;
 using HarmonyLib;
 
@@ -176,7 +177,7 @@ namespace ROR_O.patches
                 }
             }
 
-            if (worker.fault != null || !ROROConfig.EnableThreadedSteamP2P)
+            if (worker.fault != null || !SteamP2PSettings.Threaded)
             {
                 if (worker.fault != null)
                 {
@@ -215,7 +216,7 @@ namespace ROR_O.patches
 
         private static bool ShouldBind(Networking networking)
         {
-            bool enabled = ROROConfig.EnableThreadedSteamP2P;
+            bool enabled = SteamP2PSettings.Threaded;
             if (enabled && !threadedSteamWasEnabled)
             {
                 bindingFailed = false;
@@ -654,6 +655,34 @@ namespace ROR_O.patches
                     bufferPool.Push(buffer);
                 }
             }
+        }
+    }
+
+    internal static class SteamP2PSettings
+    {
+        private static ConfigEntry<bool>? threaded;
+        private static ConfigEntry<bool>? debugOverlay;
+
+        public static bool Threaded => threaded?.Value ?? true;
+
+        public static bool DebugOverlay => debugOverlay?.Value ?? false;
+
+        public static ConfigEntry<bool>? ThreadedEntry => threaded;
+
+        public static ConfigEntry<bool>? DebugEntry => debugOverlay;
+
+        public static void Bind(ConfigFile config)
+        {
+            threaded = config.Bind(
+                "Network",
+                "Threaded Steam P2P",
+                true,
+                "Moves Steam P2P packet sends and reads off the main thread to a background thread. The packet format does not change, so it works with players who do not have ROR-O. Takes effect immediately.");
+            debugOverlay = config.Bind(
+                "Network",
+                "Debug Overlay",
+                false,
+                "Shows each player's Steam connection under their name in the lobby and on the ally card. The host measures every link. A client measures its own link to the host, and sees other players' links to the host only when the host also has ROR-O. A server without ROR-O is left unchanged.");
         }
     }
 }

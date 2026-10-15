@@ -64,7 +64,7 @@ namespace ROR_O.patches
             }
 
             nextRefreshTime = Time.unscaledTime + RefreshIntervalSeconds;
-            if (!ROROConfig.EnableNetworkDebug)
+            if (!SteamP2PSettings.DebugOverlay)
             {
                 if (labelsVisible)
                 {
@@ -116,7 +116,7 @@ namespace ROR_O.patches
     {
         private static void Postfix(AllyCardController __instance)
         {
-            if (!ROROConfig.EnableNetworkDebug)
+            if (!SteamP2PSettings.DebugOverlay)
             {
                 return;
             }
@@ -131,7 +131,7 @@ namespace ROR_O.patches
         private static void Postfix(SocialUsernameLabel __instance)
         {
             TMP_Text label = __instance.GetComponent<TMP_Text>();
-            if (!ROROConfig.EnableNetworkDebug)
+            if (!SteamP2PSettings.DebugOverlay)
             {
                 NetworkDebugText.Strip(label);
                 return;

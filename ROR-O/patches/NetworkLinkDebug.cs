@@ -56,7 +56,7 @@ namespace ROR_O.patches
 
         public static void Tick()
         {
-            if (!ROROConfig.EnableNetworkDebug)
+            if (!SteamP2PSettings.DebugOverlay)
             {
                 if (memberDataPublished || LocalLinks.Count > 0 || HostReportedLinks.Count > 0)
                 {
@@ -92,7 +92,7 @@ namespace ROR_O.patches
 
         public static string? Describe(ulong steamId)
         {
-            if (!ROROConfig.EnableNetworkDebug || steamId == 0 || steamId == LocalSteamId)
+            if (!SteamP2PSettings.DebugOverlay || steamId == 0 || steamId == LocalSteamId)
             {
                 return null;
             }

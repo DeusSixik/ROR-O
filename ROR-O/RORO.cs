@@ -72,11 +72,7 @@ namespace ROR_O
         public static bool EnableGenericIkInvisibleThrottling => enableGenericIkInvisibleThrottling?.Value ?? true;
         public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 2;
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 8;
-        public static bool EnableThreadedSteamP2P => enableThreadedSteamP2P?.Value ?? true;
-        public static bool EnableNetworkDebug => enableNetworkDebug?.Value ?? false;
 
-        private static ConfigEntry<bool>? enableThreadedSteamP2P;
-        private static ConfigEntry<bool>? enableNetworkDebug;
         private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? dynamicBonesProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? genericIkProfile;
@@ -280,18 +276,6 @@ namespace ROR_O
             SettingsProfiles.Add(genericIkRecentlyVisibleGraceFrames, 20, 8, 3);
             SettingsProfiles.End();
 
-            enableThreadedSteamP2P = config.Bind(
-                "Network",
-                "Threaded Steam P2P",
-                true,
-                "Moves Steam P2P packet sends and reads off the main thread to a background thread. The packet format does not change, so it works with players who do not have ROR-O. Takes effect immediately.");
-
-            enableNetworkDebug = config.Bind(
-                "Network",
-                "Debug Overlay",
-                false,
-                "Shows each player's Steam connection under their name in the lobby and on the ally card. The host measures every link. A client measures its own link to the host, and sees other players' links to the host only when the host also has ROR-O. A server without ROR-O is left unchanged.");
-
             RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
             {
                 DamageNumbersProfile = damageNumbersProfile,
@@ -323,8 +307,6 @@ namespace ROR_O
                 EnableGenericIkInvisibleThrottling = enableGenericIkInvisibleThrottling,
                 GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
                 GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
-                EnableThreadedSteamP2P = enableThreadedSteamP2P,
-                EnableNetworkDebug = enableNetworkDebug,
             });
         }
     }
@@ -348,7 +330,6 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
-            gameObject.AddComponent<patches.NetworkDebugDriver>();
         }
     }
 }

@@ -240,4 +240,19 @@ namespace ROR_O.patches
             return SteamSessionCheckThrottle.ShouldRun(ref nextRunTime);
         }
     }
+
+    [HarmonyPatch(typeof(RORO), "Awake")]
+    internal static class RegisterSteamP2PPatch
+    {
+        private static void Postfix(RORO __instance)
+        {
+            SteamP2PSettings.Bind(__instance.Config);
+            RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
+            {
+                EnableThreadedSteamP2P = SteamP2PSettings.ThreadedEntry,
+                EnableNetworkDebug = SteamP2PSettings.DebugEntry,
+            });
+            __instance.gameObject.AddComponent<NetworkDebugDriver>();
+        }
+    }
 }
