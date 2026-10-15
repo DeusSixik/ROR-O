@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using BepInEx.Configuration;
 using HarmonyLib;
 using Unity.Collections;
 using Unity.Jobs;
@@ -154,11 +155,18 @@ namespace ROR_O.patches
         private static NativeArray<ColliderData> colliders;
         private static NativeArray<int> colliderRefs;
 
-        public static bool Active => installed && !failed && ROROConfig.EnableDynamicBoneJobs;
+        private static ConfigEntry<bool>? enabled;
+
+        public static bool Active => installed && !failed && enabled?.Value != false;
 
         private static AccessTools.FieldRef<object, T>? ParticleFieldRef<T>(string name)
         {
             return ParticleType == null ? null : AccessTools.FieldRefAccess<T>(ParticleType, name);
+        }
+
+        public static void Bind(ConfigEntry<bool> entry)
+        {
+            enabled = entry;
         }
 
         public static void Install()
@@ -1335,6 +1343,23 @@ namespace ROR_O.patches
         {
             DynamicBoneJobs.Stats.LateUpdateTicks += System.Diagnostics.Stopwatch.GetTimestamp() - __state;
             DynamicBoneJobs.Stats.LateUpdateCalls++;
+        }
+    }
+
+    [HarmonyPatch(typeof(RORO), "Awake")]
+    internal static class RegisterDynamicBoneJobsPatch
+    {
+        private static void Postfix(RORO __instance)
+        {
+            ConfigEntry<bool> entry = __instance.Config.Bind(
+                "Dynamic Bones",
+                "Multithreaded Simulation",
+                true,
+                "Simulates all DynamicBones that update in a frame together on Unity worker threads after LateUpdate, leaving only the final transform writes on the main thread. Takes effect immediately.");
+            DynamicBoneJobs.Bind(entry);
+            SettingsProfiles.AddLate("Dynamic Bones", entry, true, true, true);
+            RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog { EnableDynamicBoneJobs = entry });
+            DynamicBoneJobs.Install();
         }
     }
 

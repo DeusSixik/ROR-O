@@ -72,9 +72,7 @@ namespace ROR_O
         public static bool EnableGenericIkInvisibleThrottling => enableGenericIkInvisibleThrottling?.Value ?? true;
         public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 2;
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 8;
-        public static bool EnableDynamicBoneJobs => enableDynamicBoneJobs?.Value ?? true;
 
-        private static ConfigEntry<bool>? enableDynamicBoneJobs;
         private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? dynamicBonesProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? genericIkProfile;
@@ -242,12 +240,6 @@ namespace ROR_O
                 3,
                 "When a visible DynamicBone rig is beyond the far distance, only run a full LateUpdate once every N frames.");
 
-            enableDynamicBoneJobs = config.Bind(
-                dynamicBonesSection,
-                "Multithreaded Simulation",
-                true,
-                "Simulates all DynamicBones that update in a frame together on Unity worker threads after LateUpdate, leaving only the final transform writes on the main thread. Takes effect immediately.");
-
             dynamicBonesProfile = SettingsProfiles.Begin(config, dynamicBonesSection);
             SettingsProfiles.Add(enableDynamicBoneInvisibleThrottling, true, true, true);
             SettingsProfiles.Add(dynamicBoneInvisibleUpdateInterval, 6, 3, 10);
@@ -256,7 +248,6 @@ namespace ROR_O
             SettingsProfiles.Add(dynamicBoneVisibleFarDistance, 130f, 55f, 45f);
             SettingsProfiles.Add(dynamicBoneVisibleMidUpdateInterval, 1, 2, 3);
             SettingsProfiles.Add(dynamicBoneVisibleFarUpdateInterval, 2, 3, 5);
-            SettingsProfiles.Add(enableDynamicBoneJobs, true, true, true);
             SettingsProfiles.End();
 
             const string genericIkSection = "Generic IK";
@@ -312,7 +303,6 @@ namespace ROR_O
                 DynamicBoneVisibleFarDistance = dynamicBoneVisibleFarDistance,
                 DynamicBoneVisibleMidUpdateInterval = dynamicBoneVisibleMidUpdateInterval,
                 DynamicBoneVisibleFarUpdateInterval = dynamicBoneVisibleFarUpdateInterval,
-                EnableDynamicBoneJobs = enableDynamicBoneJobs,
                 GenericIkProfile = genericIkProfile,
                 EnableGenericIkInvisibleThrottling = enableGenericIkInvisibleThrottling,
                 GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
@@ -340,7 +330,6 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
-            patches.DynamicBoneJobs.Install();
         }
     }
 }
