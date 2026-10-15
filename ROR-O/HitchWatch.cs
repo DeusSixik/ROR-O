@@ -5,6 +5,8 @@ using System.IO;
 using System.Text;
 using BepInEx;
 using BepInEx.Bootstrap;
+using BepInEx.Configuration;
+using HarmonyLib;
 using RoR2;
 using Unity.Profiling;
 using UnityEngine;
@@ -142,7 +144,7 @@ namespace ROR_O
 
         private void Update()
         {
-            if (!ROROConfig.EnableHitchWatch)
+            if (!HitchWatchSettings.Enabled)
             {
                 if (running)
                 {
@@ -860,7 +862,7 @@ namespace ROR_O
 
         private static float TargetMs()
         {
-            return 1000f / ROROConfig.HitchWatchTargetFps;
+            return 1000f / HitchWatchSettings.TargetFps;
         }
 
         private static string ReasonFor(bool renderP999, bool cpuP999, bool renderP99, bool cpuP99)
@@ -1188,6 +1190,80 @@ namespace ROR_O
             }
 
             return (float)(seconds * 1000d);
+        }
+    }
+
+    internal static class HitchWatchSettings
+    {
+        private static ConfigEntry<bool>? enabled;
+        private static ConfigEntry<int>? targetFps;
+        private static ConfigEntry<bool>? monoProfiler;
+
+        public static bool Enabled => enabled?.Value ?? false;
+
+        public static ConfigEntry<bool>? EnabledEntry => enabled;
+
+        public static ConfigEntry<int>? TargetFpsEntry => targetFps;
+
+        public static ConfigEntry<bool>? MonoProfilerEntry => monoProfiler;
+
+        public static int TargetFps
+        {
+            get
+            {
+                int value = targetFps?.Value ?? 60;
+                if (value < 30)
+                {
+                    return 30;
+                }
+
+                return value > 240 ? 240 : value;
+            }
+        }
+
+        public static void Bind(ConfigFile config)
+        {
+            bool profilerSettingExists = ProfilerToggle.ConfigHasEnableSetting(config.ConfigFilePath);
+            monoProfiler = config.Bind(
+                "Profiler",
+                "Enable Mono Profiler",
+                ProfilerToggle.IsLoaderInstalledInPatchers(),
+                "On the next launch, load the separately installed BepInEx.Debug Mono Profiler. ROR-O runs normally when this is off or when the profiler is not installed. The switch does not take effect until the game is restarted.");
+            if (profilerSettingExists)
+            {
+                ProfilerToggle.Apply(monoProfiler.Value);
+            }
+
+            monoProfiler.SettingChanged += (_, __) => ProfilerToggle.Apply(monoProfiler.Value);
+
+            enabled = config.Bind(
+                "Profiler",
+                "Hitch Watch",
+                false,
+                "Records frame time without the Mono profiler. Reads Unity's own counters every frame and writes the slow tail (1% and 0.1% of CPU and render time) plus any 10 second stretch under the recent median or the target FPS. Applies immediately.");
+
+            targetFps = config.Bind(
+                "Profiler",
+                "Hitch Watch Target FPS",
+                60,
+                "Playable frame rate. Hitch Watch marks a stretch when its average FPS stays under this, or under the recent median. 60 is a frame every 16.7 ms.");
+        }
+    }
+
+    [HarmonyPatch(typeof(RORO), "Awake")]
+    internal static class RegisterHitchWatchPatch
+    {
+        private static void Postfix(RORO __instance)
+        {
+            HitchWatchSettings.Bind(__instance.Config);
+            RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
+            {
+                EnableHitchWatch = HitchWatchSettings.EnabledEntry,
+                HitchWatchTargetFps = HitchWatchSettings.TargetFpsEntry,
+                EnableMonoProfiler = HitchWatchSettings.MonoProfilerEntry,
+            });
+            __instance.gameObject.AddComponent<ProfilerDumpNotice>();
+            __instance.gameObject.AddComponent<HitchWatch>();
         }
     }
 }

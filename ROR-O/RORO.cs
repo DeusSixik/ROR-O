@@ -72,26 +72,7 @@ namespace ROR_O
         public static bool EnableGenericIkInvisibleThrottling => enableGenericIkInvisibleThrottling?.Value ?? true;
         public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 2;
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 8;
-        public static bool EnableMonoProfiler => enableMonoProfiler?.Value ?? false;
-        public static bool EnableHitchWatch => enableHitchWatch?.Value ?? false;
 
-        public static int HitchWatchTargetFps
-        {
-            get
-            {
-                int value = hitchWatchTargetFps?.Value ?? 60;
-                if (value < 30)
-                {
-                    return 30;
-                }
-
-                return value > 240 ? 240 : value;
-            }
-        }
-
-        private static ConfigEntry<bool>? enableMonoProfiler;
-        private static ConfigEntry<bool>? enableHitchWatch;
-        private static ConfigEntry<int>? hitchWatchTargetFps;
         private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? dynamicBonesProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? genericIkProfile;
@@ -295,31 +276,6 @@ namespace ROR_O
             SettingsProfiles.Add(genericIkRecentlyVisibleGraceFrames, 20, 8, 3);
             SettingsProfiles.End();
 
-            bool profilerSettingExists = ProfilerToggle.ConfigHasEnableSetting(config.ConfigFilePath);
-            enableMonoProfiler = config.Bind(
-                "Profiler",
-                "Enable Mono Profiler",
-                ProfilerToggle.IsLoaderInstalledInPatchers(),
-                "On the next launch, load the separately installed BepInEx.Debug Mono Profiler. ROR-O runs normally when this is off or when the profiler is not installed. The switch does not take effect until the game is restarted.");
-            if (profilerSettingExists)
-            {
-                ProfilerToggle.Apply(enableMonoProfiler.Value);
-            }
-
-            enableMonoProfiler.SettingChanged += (_, __) => ProfilerToggle.Apply(enableMonoProfiler.Value);
-
-            enableHitchWatch = config.Bind(
-                "Profiler",
-                "Hitch Watch",
-                false,
-                "Records frame time without the Mono profiler. Reads Unity's own counters every frame and writes the slow tail (1% and 0.1% of CPU and render time) plus any 10 second stretch under the recent median or the target FPS. Applies immediately.");
-
-            hitchWatchTargetFps = config.Bind(
-                "Profiler",
-                "Hitch Watch Target FPS",
-                60,
-                "Playable frame rate. Hitch Watch marks a stretch when its average FPS stays under this, or under the recent median. 60 is a frame every 16.7 ms.");
-
             RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
             {
                 DamageNumbersProfile = damageNumbersProfile,
@@ -351,9 +307,6 @@ namespace ROR_O
                 EnableGenericIkInvisibleThrottling = enableGenericIkInvisibleThrottling,
                 GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
                 GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
-                EnableHitchWatch = enableHitchWatch,
-                HitchWatchTargetFps = hitchWatchTargetFps,
-                EnableMonoProfiler = enableMonoProfiler,
             });
         }
     }
@@ -377,8 +330,6 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
-            gameObject.AddComponent<ProfilerDumpNotice>();
-            gameObject.AddComponent<HitchWatch>();
         }
     }
 }
