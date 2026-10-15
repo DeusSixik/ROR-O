@@ -19,6 +19,7 @@ namespace ROR_O
 
         private static int suppress;
         private static Group? current;
+        private static readonly Dictionary<string, Group> finished = new Dictionary<string, Group>();
 
         private sealed class Group
         {
@@ -88,10 +89,58 @@ namespace ROR_O
             AddCore(entry, lossless, performance, potato);
         }
 
+        // A later feature can join a group that has already been closed, without editing the shared setup.
+        public static void AddLate(string section, ConfigEntry<bool>? entry, bool lossless, bool performance, bool potato)
+        {
+            if (entry == null || !finished.TryGetValue(section, out Group group))
+            {
+                return;
+            }
+
+            var option = new Option
+            {
+                Entry = entry,
+                Lossless = lossless,
+                Performance = performance,
+                Potato = potato,
+                Subscribe = handler => entry.SettingChanged += handler
+            };
+            group.Options.Add(option);
+            option.Subscribe((_, __) =>
+            {
+                if (suppress > 0)
+                {
+                    return;
+                }
+
+                Profile detected = Detect(group);
+                if (group.ProfileEntry.Value != detected)
+                {
+                    AssignProfile(group, detected);
+                }
+            });
+
+            if (group.ProfileEntry.Value == Profile.Custom)
+            {
+                return;
+            }
+
+            suppress++;
+            try
+            {
+                Assign(option.Entry, option.For(group.ProfileEntry.Value));
+            }
+            finally
+            {
+                suppress--;
+            }
+        }
+
         public static void End()
         {
             Group group = current ?? throw new InvalidOperationException("No settings profile group is being built.");
             current = null;
+            finished[group.Section] = group;
             Sync(group);
 
             group.ProfileEntry.SettingChanged += (_, __) =>
