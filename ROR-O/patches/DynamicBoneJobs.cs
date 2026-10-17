@@ -1613,12 +1613,12 @@ namespace ROR_O.patches
         }
     }
 
-    [HarmonyPatch(typeof(RORO), "Awake")]
     internal static class RegisterDynamicBoneJobsPatch
     {
-        private static void Postfix(RORO __instance)
+        // Called from RORO.Awake after PatchAll. A postfix on that Awake cannot see the call that installs it.
+        public static void Register(RORO plugin)
         {
-            ConfigEntry<bool> entry = __instance.Config.Bind(
+            ConfigEntry<bool> entry = plugin.Config.Bind(
                 "Dynamic Bones",
                 "Multithreaded Simulation",
                 true,

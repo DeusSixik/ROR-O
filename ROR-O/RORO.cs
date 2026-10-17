@@ -340,6 +340,8 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
+            HitchWatchStartup.Register(this);
+            patches.RegisterDynamicBoneJobsPatch.Register(this);
             gameObject.AddComponent<SpawnPrewarm>();
         }
     }
