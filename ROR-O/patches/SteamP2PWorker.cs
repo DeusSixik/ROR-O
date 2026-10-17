@@ -682,7 +682,7 @@ namespace ROR_O.patches
                 "Network",
                 "Debug Overlay",
                 false,
-                "Shows each player's Steam connection under their name in the lobby and on the ally card. The host measures every link. A client measures its own link to the host, and sees other players' links to the host only when the host also has ROR-O. A server without ROR-O is left unchanged.");
+                "Shows each player's Steam connection under their name in the lobby and on the ally card. The host measures every link. A client measures its own link to the host, and sees other players' links to the host only when the host also has ROR-O. A server without ROR-O is left unchanged. Game version stays after each name in the lobby and in a run, in red when it is not yours.");
         }
     }
 }

@@ -41,6 +41,7 @@ namespace ROR_O.patches
     internal static class NetworkLinkDebug
     {
         private const string MemberDataKey = "roro_net";
+        private const string VersionKey = "roro_ver";
         private const float SampleIntervalSeconds = 0.5f;
         private const float PublishIntervalSeconds = 1f;
 
@@ -53,6 +54,75 @@ namespace ROR_O.patches
         private static float nextPublishTime;
         private static bool memberDataPublished;
         private static string publishedValue = "";
+        private static string publishedVersion = "";
+        private static ulong publishedVersionLobby;
+
+        // Vanilla only writes one lobby-wide build_id, which is the host. A player with this mod also
+        // publishes their own build on their lobby member data. Other non-mod players never send a version.
+        public static void PublishLocalVersion()
+        {
+            Lobby? lobby = Client.Instance?.Lobby;
+            if (lobby == null || !lobby.IsValid)
+            {
+                publishedVersion = "";
+                publishedVersionLobby = 0;
+                return;
+            }
+
+            ulong lobbyId = lobby.CurrentLobby;
+            if (lobbyId != publishedVersionLobby)
+            {
+                publishedVersionLobby = lobbyId;
+                publishedVersion = "";
+            }
+
+            string mine = LocalBuildId();
+            if (mine.Length == 0 || mine == publishedVersion)
+            {
+                return;
+            }
+
+            lobby.SetMemberData(VersionKey, mine);
+            publishedVersion = mine;
+        }
+
+        public static bool TryDescribeVersion(ulong steamId, out string version, out bool mismatch)
+        {
+            version = "";
+            mismatch = false;
+            if (steamId == 0)
+            {
+                return false;
+            }
+
+            if (steamId == LocalSteamId)
+            {
+                version = LocalBuildId();
+                return version.Length > 0;
+            }
+
+            Lobby? lobby = Client.Instance?.Lobby;
+            if (lobby == null || !lobby.IsValid)
+            {
+                return false;
+            }
+
+            string reported = lobby.GetMemberData(steamId, VersionKey);
+            if (!IsVersionToken(reported) && IsLobbyHost(lobby, steamId))
+            {
+                reported = lobby.CurrentLobbyData != null ? lobby.CurrentLobbyData.GetData("build_id") : "";
+            }
+
+            if (!IsVersionToken(reported))
+            {
+                return false;
+            }
+
+            version = reported;
+            string mine = LocalBuildId();
+            mismatch = mine.Length > 0 && !string.Equals(mine, version, StringComparison.Ordinal);
+            return true;
+        }
 
         public static void Tick()
         {
@@ -117,6 +187,72 @@ namespace ROR_O.patches
         }
 
         private static ulong LocalSteamId => Client.Instance?.SteamId ?? 0;
+
+        private static string LocalBuildId()
+        {
+            try
+            {
+                string buildId = RoR2Application.GetBuildId();
+                return IsVersionToken(buildId) ? buildId : "";
+            }
+            catch (Exception)
+            {
+                return "";
+            }
+        }
+
+        private static bool IsVersionToken(string? value)
+        {
+            if (string.IsNullOrEmpty(value) || value!.Length > 40)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                bool ok = (c >= '0' && c <= '9')
+                    || (c >= 'A' && c <= 'Z')
+                    || (c >= 'a' && c <= 'z')
+                    || c == '.'
+                    || c == '#'
+                    || c == '*'
+                    || c == '-';
+                if (!ok)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public static bool IsKnownHost(ulong steamId)
+        {
+            if (steamId == 0)
+            {
+                return false;
+            }
+
+            if (steamId == LocalSteamId && NetworkServer.active)
+            {
+                return true;
+            }
+
+            Lobby? lobby = Client.Instance?.Lobby;
+            return lobby != null && lobby.IsValid && IsLobbyHost(lobby, steamId);
+        }
+
+        private static bool IsLobbyHost(Lobby lobby, ulong steamId)
+        {
+            if (lobby.Owner == steamId)
+            {
+                return true;
+            }
+
+            SteamworksLobbyManager? manager = PlatformSystems.lobbyManager as SteamworksLobbyManager;
+            return manager != null && manager.serverId.isValid && manager.serverId.ID == steamId;
+        }
 
         private static void Clear()
         {

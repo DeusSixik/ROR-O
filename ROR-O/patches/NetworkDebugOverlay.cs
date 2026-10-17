@@ -8,9 +8,12 @@ namespace ROR_O.patches
 {
     internal static class NetworkDebugText
     {
-        private const string Marker = "\n<size=62%><color=#A9C3D4>";
+        private const string Marker = " <size=70%><color=#";
+        private const string OldMarker = "\n<size=62%><color=#";
+        private const string MatchColor = "A9C3D4";
+        private const string MismatchColor = "FF5C5C";
 
-        public static void Apply(TMP_Text? label, ulong steamId)
+        public static void Apply(TMP_Text? label, ulong steamId, bool includeVersion)
         {
             if (label == null)
             {
@@ -19,8 +22,8 @@ namespace ROR_O.patches
 
             string current = label.text ?? "";
             string baseText = Strip(current);
-            string? detail = NetworkLinkDebug.Describe(steamId);
-            string next = string.IsNullOrEmpty(detail) ? baseText : baseText + Marker + detail + "</color></size>";
+            string? extra = FormatExtra(steamId, includeVersion);
+            string next = extra == null ? baseText : baseText + extra;
             if (!string.Equals(current, next, System.StringComparison.Ordinal))
             {
                 label.text = next;
@@ -41,10 +44,48 @@ namespace ROR_O.patches
             }
         }
 
+        private static string? FormatExtra(ulong steamId, bool includeVersion)
+        {
+            string version = "";
+            bool mismatch = false;
+            bool haveVersion = includeVersion && NetworkLinkDebug.TryDescribeVersion(steamId, out version, out mismatch);
+            string? link = NetworkLinkDebug.Describe(steamId);
+            if (!includeVersion && string.IsNullOrEmpty(link))
+            {
+                return null;
+            }
+
+            string body = haveVersion ? version : "нет данных";
+            string color = haveVersion && mismatch ? MismatchColor : MatchColor;
+            if (!string.IsNullOrEmpty(link))
+            {
+                body += " · " + link;
+            }
+
+            return Marker + color + ">" + body + "</color></size>";
+        }
+
         private static string Strip(string text)
         {
-            int marker = text.IndexOf(Marker, System.StringComparison.Ordinal);
+            int marker = IndexOfMarker(text);
             return marker < 0 ? text : text.Substring(0, marker);
+        }
+
+        private static int IndexOfMarker(string text)
+        {
+            int current = text.IndexOf(Marker, System.StringComparison.Ordinal);
+            int previous = text.IndexOf(OldMarker, System.StringComparison.Ordinal);
+            if (current < 0)
+            {
+                return previous;
+            }
+
+            if (previous < 0)
+            {
+                return current;
+            }
+
+            return current < previous ? current : previous;
         }
     }
 
@@ -53,10 +94,10 @@ namespace ROR_O.patches
         private const float RefreshIntervalSeconds = 0.25f;
 
         private float nextRefreshTime;
-        private bool labelsVisible;
 
         private void Update()
         {
+            NetworkLinkDebug.PublishLocalVersion();
             NetworkLinkDebug.Tick();
             if (Time.unscaledTime < nextRefreshTime)
             {
@@ -64,18 +105,6 @@ namespace ROR_O.patches
             }
 
             nextRefreshTime = Time.unscaledTime + RefreshIntervalSeconds;
-            if (!SteamP2PSettings.DebugOverlay)
-            {
-                if (labelsVisible)
-                {
-                    ClearLabels();
-                    labelsVisible = false;
-                }
-
-                return;
-            }
-
-            labelsVisible = true;
             AllyCardController[] cards = FindObjectsOfType<AllyCardController>();
             for (int i = 0; i < cards.Length; i++)
             {
@@ -85,22 +114,7 @@ namespace ROR_O.patches
                     continue;
                 }
 
-                NetworkDebugText.Apply(card.nameLabel, SteamIdOf(card.sourceMaster));
-            }
-        }
-
-        private static void ClearLabels()
-        {
-            AllyCardController[] cards = FindObjectsOfType<AllyCardController>();
-            for (int i = 0; i < cards.Length; i++)
-            {
-                NetworkDebugText.Strip(cards[i] != null ? cards[i].nameLabel : null);
-            }
-
-            SocialUsernameLabel[] names = FindObjectsOfType<SocialUsernameLabel>();
-            for (int i = 0; i < names.Length; i++)
-            {
-                NetworkDebugText.Strip(names[i] != null ? names[i].GetComponent<TMP_Text>() : null);
+                NetworkDebugText.Apply(card.nameLabel, SteamIdOf(card.sourceMaster), includeVersion: true);
             }
         }
 
@@ -116,12 +130,7 @@ namespace ROR_O.patches
     {
         private static void Postfix(AllyCardController __instance)
         {
-            if (!SteamP2PSettings.DebugOverlay)
-            {
-                return;
-            }
-
-            NetworkDebugText.Apply(__instance.nameLabel, NetworkDebugDriver.SteamIdOf(__instance.sourceMaster));
+            NetworkDebugText.Apply(__instance.nameLabel, NetworkDebugDriver.SteamIdOf(__instance.sourceMaster), includeVersion: true);
         }
     }
 
@@ -130,14 +139,7 @@ namespace ROR_O.patches
     {
         private static void Postfix(SocialUsernameLabel __instance)
         {
-            TMP_Text label = __instance.GetComponent<TMP_Text>();
-            if (!SteamP2PSettings.DebugOverlay)
-            {
-                NetworkDebugText.Strip(label);
-                return;
-            }
-
-            NetworkDebugText.Apply(label, __instance.userId.ID);
+            NetworkDebugText.Apply(__instance.GetComponent<TMP_Text>(), __instance.userId.ID, includeVersion: true);
         }
     }
 }
