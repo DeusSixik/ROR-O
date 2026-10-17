@@ -1,3 +1,6 @@
+// Off for now. A profiled run put GraphicRaycaster.Raycast around 0.07 ms/frame
+// including the work it calls, so reusing the hit list is not worth a separate path.
+#if false
 using System.Collections.Generic;
 using HarmonyLib;
 using UnityEngine;
@@ -206,3 +209,4 @@ namespace ROR_O.patches
         }
     }
 }
+#endif
