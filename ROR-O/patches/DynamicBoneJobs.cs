@@ -16,8 +16,10 @@ namespace ROR_O.patches
     // Runs DynamicBone.UpdateDynamicBones for every bone that updates this frame in one batch after all LateUpdates:
     // transforms are read by a parallel read-only job, the particle simulation runs in parallel per bone, and the
     // main thread only writes one SetPositionAndRotation per particle, parent before child, like vanilla does.
-    // The vanilla Particle objects stay the source of truth, so ResetParticlesPosition, SetWeight, distance disable and
-    // InitTransforms keep working untouched.
+    // Particle positions stay in the native buffer. They are copied from the vanilla Particle objects when a slot is
+    // created and after ResetParticlesPosition (enable, weight, coming back from distance disable). Destroyed rigs
+    // leave the transform array. Distant rigs stay: the read job returns before touching them, and removing them on
+    // every distance change would sort that array more often than a death wave.
     internal static class DynamicBoneJobs
     {
         private const int ChildCountRefreshFrames = 30;
@@ -79,12 +81,22 @@ namespace ROR_O.patches
             public IList Particles = null!;
             public object[] ParticleObjects = Array.Empty<object>();
             public Transform?[] ParticleTransforms = Array.Empty<Transform?>();
+            public int[] TransformIndices = Array.Empty<int>();
             public int ParticleStart;
-            public int BoneTransformIndex;
-            public int TransformStart;
-            public int TransformCount;
+            public int ParticleCount;
+            public int BoneTransformIndex = -1;
             public int NextChildCountRefresh;
             public bool UseVanilla;
+            public bool Registered;
+            public bool LayoutDirty = true;
+            public bool PullState = true;
+            public bool NativeStateValid;
+        }
+
+        private struct Range
+        {
+            public int Start;
+            public int Count;
         }
 
         private struct PendingBone
@@ -134,7 +146,11 @@ namespace ROR_O.patches
         private static readonly List<ColliderData> ColliderList = new List<ColliderData>();
         private static readonly List<int> ColliderRefList = new List<int>();
 
-        private static bool registryDirty;
+        private static readonly List<Range> FreeParticleRanges = new List<Range>();
+        private static int particleHighWater;
+        private static Slot?[] ownerByTransform = Array.Empty<Slot?>();
+        private static int[] localByTransform = Array.Empty<int>();
+
         private static bool installed;
         private static bool failed;
 
@@ -254,17 +270,23 @@ namespace ROR_O.patches
                 slot = new Slot { Bone = bone, Particles = particles };
                 SlotByBone.Add(bone, slot);
                 Slots.Add(slot);
-                registryDirty = true;
             }
 
-            if (slot.UseVanilla || slot.Particles.Count == 0)
+            if (slot.Particles.Count == 0)
             {
                 return false;
             }
 
-            if (slot.Particles.Count != slot.ParticleObjects.Length || !ReferenceEquals(slot.Particles[0], slot.ParticleObjects[0]))
+            if (!slot.Registered
+                || slot.ParticleObjects.Length != slot.Particles.Count
+                || !ReferenceEquals(slot.Particles[0], slot.ParticleObjects[0]))
             {
-                registryDirty = true;
+                slot.LayoutDirty = true;
+            }
+
+            if (slot.UseVanilla && !slot.LayoutDirty)
+            {
+                return false;
             }
 
             float deltaTime = Time.deltaTime;
@@ -290,11 +312,6 @@ namespace ROR_O.patches
                 }
 
                 RemoveDestroyedSlots();
-                if (registryDirty)
-                {
-                    RebuildRegistry();
-                }
-
                 Simulate();
             }
             catch (Exception exception)
@@ -382,12 +399,35 @@ namespace ROR_O.patches
         {
             for (int i = 0; i < Pending.Count; i++)
             {
-                DynamicBone bone = Pending[i].Slot.Bone;
-                if (bone != null)
-                {
-                    TimeRef(bone) = Pending[i].TimeBeforeStep;
-                    UpdateDynamicBones(bone, Pending[i].DeltaTime);
-                }
+                RunVanilla(Pending[i]);
+            }
+        }
+
+        private static void RunVanilla(PendingBone pending)
+        {
+            Slot slot = pending.Slot;
+            DynamicBone bone = slot.Bone;
+            if (bone == null)
+            {
+                return;
+            }
+
+            if (slot.LayoutDirty)
+            {
+                SyncSlot(slot);
+            }
+
+            PushParticleState(slot);
+            TimeRef(bone) = pending.TimeBeforeStep;
+            UpdateDynamicBones(bone, pending.DeltaTime);
+            slot.PullState = true;
+        }
+
+        internal static void NoteParticlesReset(DynamicBone bone)
+        {
+            if (SlotByBone.TryGetValue(bone, out Slot slot))
+            {
+                slot.PullState = true;
             }
         }
 
@@ -398,118 +438,326 @@ namespace ROR_O.patches
                 Slot slot = Slots[i];
                 if (slot.Bone == null)
                 {
+                    ReleaseSlot(slot);
                     Slots.RemoveAt(i);
                     SlotByBone.Remove(slot.Bone!);
-                    registryDirty = true;
                 }
             }
 
-            if (registryDirty)
+            for (int i = Pending.Count - 1; i >= 0; i--)
             {
-                for (int i = Pending.Count - 1; i >= 0; i--)
+                if (Pending[i].Slot.Bone == null)
                 {
-                    if (Pending[i].Slot.Bone == null)
-                    {
-                        Pending.RemoveAt(i);
-                    }
+                    Pending.RemoveAt(i);
                 }
             }
         }
 
-        private static void RebuildRegistry()
+        private static void SyncSlot(Slot slot)
         {
-            registryDirty = false;
-            DisposeRegistry();
-
-            var transformList = new List<Transform>();
-            int particleTotal = 0;
-            for (int i = 0; i < Slots.Count; i++)
+            slot.LayoutDirty = false;
+            IList particles = slot.Particles;
+            int count = particles.Count;
+            if (count == 0 || ParticleTransformRef == null || ParticleParentRef == null)
             {
-                Slot slot = Slots[i];
-                int count = slot.Particles.Count;
-                slot.ParticleObjects = new object[count];
-                slot.ParticleTransforms = new Transform?[count];
-                slot.ParticleStart = particleTotal;
-                slot.NextChildCountRefresh = 0;
-                slot.UseVanilla = count == 0;
-                for (int k = 0; k < count; k++)
-                {
-                    object particle = slot.Particles[k];
-                    slot.ParticleObjects[k] = particle;
-                    Transform transform = ParticleTransformRef!(particle);
-                    if (!transform)
-                    {
-                        slot.UseVanilla = true;
-                    }
-                    else
-                    {
-                        slot.ParticleTransforms[k] = transform;
-                    }
-                }
-
-                if (slot.ParticleTransforms.Length == 0 || slot.ParticleTransforms[0] == null)
-                {
-                    slot.UseVanilla = true;
-                }
-
-                if (!slot.UseVanilla)
-                {
-                    particleTotal += count;
-                }
+                ReleaseSlot(slot);
+                slot.UseVanilla = true;
+                return;
             }
 
-            particleStatic = new NativeArray<ParticleStatic>(Math.Max(1, particleTotal), Allocator.Persistent);
-            particleState = new NativeArray<ParticleState>(Math.Max(1, particleTotal), Allocator.Persistent);
-            childCounts = new NativeArray<int>(Math.Max(1, particleTotal), Allocator.Persistent);
-            outRotation = new NativeArray<Quaternion>(Math.Max(1, particleTotal), Allocator.Persistent);
-            outFlags = new NativeArray<byte>(Math.Max(1, particleTotal), Allocator.Persistent);
-
-            for (int i = 0; i < Slots.Count; i++)
+            int transformCount = 1;
+            bool missingTransform = false;
+            for (int k = 0; k < count; k++)
             {
-                Slot slot = Slots[i];
-                if (slot.UseVanilla)
+                if (!ParticleTransformRef(particles[k]))
+                {
+                    missingTransform = true;
+                    break;
+                }
+
+                transformCount++;
+            }
+
+            bool sameObjects = slot.ParticleObjects.Length == count
+                && ReferenceEquals(particles[0], slot.ParticleObjects[0]);
+            if (missingTransform)
+            {
+                if (sameObjects)
+                {
+                    PushParticleState(slot);
+                }
+
+                ReleaseSlot(slot);
+                slot.UseVanilla = true;
+                return;
+            }
+
+            bool sameShape = slot.Registered
+                && slot.ParticleCount == count
+                && slot.TransformIndices.Length == transformCount;
+            if (!sameShape)
+            {
+                if (sameObjects)
+                {
+                    PushParticleState(slot);
+                }
+
+                ReleaseSlot(slot);
+                slot.ParticleObjects = new object[count];
+                slot.ParticleTransforms = new Transform?[count];
+                slot.ParticleCount = count;
+                slot.ParticleStart = AllocateParticleRange(count);
+                slot.TransformIndices = new int[transformCount];
+                slot.BoneTransformIndex = AddTransform(slot, 0, slot.Bone.transform);
+                slot.TransformIndices[0] = slot.BoneTransformIndex;
+                slot.Registered = true;
+                slot.NativeStateValid = false;
+                slot.PullState = true;
+                slot.NextChildCountRefresh = 0;
+                slot.UseVanilla = false;
+
+                int start = slot.ParticleStart;
+                for (int k = 0; k < count; k++)
+                {
+                    object particle = particles[k];
+                    Transform transform = ParticleTransformRef(particle);
+                    slot.ParticleObjects[k] = particle;
+                    slot.ParticleTransforms[k] = transform;
+                    int transformIndex = AddTransform(slot, k + 1, transform);
+                    slot.TransformIndices[k + 1] = transformIndex;
+                    WriteParticleStatic(start + k, particle, transformIndex);
+                }
+
+                return;
+            }
+
+            slot.UseVanilla = false;
+            if (!sameObjects)
+            {
+                slot.PullState = true;
+                slot.NextChildCountRefresh = 0;
+            }
+
+            if (transforms[slot.TransformIndices[0]] != slot.Bone.transform)
+            {
+                transforms[slot.TransformIndices[0]] = slot.Bone.transform;
+            }
+
+            int particleStart = slot.ParticleStart;
+            for (int k = 0; k < count; k++)
+            {
+                object particle = particles[k];
+                Transform transform = ParticleTransformRef(particle);
+                slot.ParticleObjects[k] = particle;
+                slot.ParticleTransforms[k] = transform;
+                int transformIndex = slot.TransformIndices[k + 1];
+                if (transforms[transformIndex] != transform)
+                {
+                    transforms[transformIndex] = transform;
+                }
+
+                WriteParticleStatic(particleStart + k, particle, transformIndex);
+            }
+        }
+
+        private static void WriteParticleStatic(int index, object particle, int transformIndex)
+        {
+            particleStatic[index] = new ParticleStatic
+            {
+                ParentIndex = ParticleParentRef!(particle),
+                TransformIndex = transformIndex,
+                Damping = ParticleDampingRef!(particle),
+                Elasticity = ParticleElasticityRef!(particle),
+                Stiffness = ParticleStiffnessRef!(particle),
+                Inert = ParticleInertRef!(particle),
+                Radius = ParticleRadiusRef!(particle),
+                EndOffset = ParticleEndOffsetRef!(particle),
+            };
+        }
+
+        private static void ReleaseSlot(Slot slot)
+        {
+            if (!slot.Registered)
+            {
+                return;
+            }
+
+            RemoveSlotTransforms(slot);
+            if (slot.ParticleCount > 0)
+            {
+                FreeParticleRanges.Add(new Range { Start = slot.ParticleStart, Count = slot.ParticleCount });
+            }
+
+            slot.Registered = false;
+            slot.NativeStateValid = false;
+            slot.ParticleCount = 0;
+            slot.ParticleStart = 0;
+            slot.BoneTransformIndex = -1;
+            slot.TransformIndices = Array.Empty<int>();
+        }
+
+        private static void RemoveSlotTransforms(Slot slot)
+        {
+            int[] pending = slot.TransformIndices;
+            int count = pending.Length;
+            for (int n = 0; n < count; n++)
+            {
+                int index = pending[n];
+                int last = transforms.length - 1;
+                Slot? moved = index == last ? null : ownerByTransform[last];
+                int movedLocal = index == last ? -1 : localByTransform[last];
+                transforms.RemoveAtSwapBack(index);
+                if (index == last)
                 {
                     continue;
                 }
 
-                slot.TransformStart = transformList.Count;
-                slot.BoneTransformIndex = transformList.Count;
-                transformList.Add(slot.Bone.transform);
-                for (int k = 0; k < slot.ParticleObjects.Length; k++)
+                for (int p = n + 1; p < count; p++)
                 {
-                    object particle = slot.ParticleObjects[k];
-                    int transformIndex = -1;
-                    if (slot.ParticleTransforms[k] != null)
+                    if (pending[p] == last)
                     {
-                        transformIndex = transformList.Count;
-                        transformList.Add(slot.ParticleTransforms[k]!);
+                        pending[p] = index;
                     }
-
-                    particleStatic[slot.ParticleStart + k] = new ParticleStatic
-                    {
-                        ParentIndex = ParticleParentRef!(particle),
-                        TransformIndex = transformIndex,
-                        Damping = ParticleDampingRef!(particle),
-                        Elasticity = ParticleElasticityRef!(particle),
-                        Stiffness = ParticleStiffnessRef!(particle),
-                        Inert = ParticleInertRef!(particle),
-                        Radius = ParticleRadiusRef!(particle),
-                        EndOffset = ParticleEndOffsetRef!(particle),
-                    };
                 }
 
-                slot.TransformCount = transformList.Count - slot.TransformStart;
+                if (moved != null && !ReferenceEquals(moved, slot))
+                {
+                    moved.TransformIndices[movedLocal] = index;
+                    RemapTransformIndex(moved, last, index);
+                    ownerByTransform[index] = moved;
+                    localByTransform[index] = movedLocal;
+                }
+                else
+                {
+                    ownerByTransform[index] = null;
+                }
+            }
+        }
+
+        private static void RemapTransformIndex(Slot slot, int from, int to)
+        {
+            if (slot.BoneTransformIndex == from)
+            {
+                slot.BoneTransformIndex = to;
             }
 
-            int transformTotal = Math.Max(1, transformList.Count);
-            transforms = new TransformAccessArray(transformList.ToArray());
-            readPosition = new NativeArray<Vector3>(transformTotal, Allocator.Persistent);
-            readRotation = new NativeArray<Quaternion>(transformTotal, Allocator.Persistent);
-            readLocalPosition = new NativeArray<Vector3>(transformTotal, Allocator.Persistent);
-            readLocalRotation = new NativeArray<Quaternion>(transformTotal, Allocator.Persistent);
-            readMatrix = new NativeArray<Matrix4x4>(transformTotal, Allocator.Persistent);
-            readValid = new NativeArray<byte>(transformTotal, Allocator.Persistent);
-            readFrame = new NativeArray<int>(transformTotal, Allocator.Persistent);
+            int start = slot.ParticleStart;
+            for (int k = 0; k < slot.ParticleCount; k++)
+            {
+                ParticleStatic particle = particleStatic[start + k];
+                if (particle.TransformIndex == from)
+                {
+                    particle.TransformIndex = to;
+                    particleStatic[start + k] = particle;
+                }
+            }
+        }
+
+        private static int AddTransform(Slot slot, int local, Transform transform)
+        {
+            if (!transforms.isCreated)
+            {
+                transforms = new TransformAccessArray(16, -1);
+            }
+
+            transforms.Add(transform);
+            int index = transforms.length - 1;
+            EnsureTransformCapacity(transforms.length);
+            ownerByTransform[index] = slot;
+            localByTransform[index] = local;
+            return index;
+        }
+
+        private static int AllocateParticleRange(int count)
+        {
+            for (int i = 0; i < FreeParticleRanges.Count; i++)
+            {
+                if (FreeParticleRanges[i].Count == count)
+                {
+                    int start = FreeParticleRanges[i].Start;
+                    FreeParticleRanges.RemoveAt(i);
+                    return start;
+                }
+            }
+
+            int allocated = particleHighWater;
+            particleHighWater += count;
+            GrowArray(ref particleStatic, particleHighWater);
+            GrowArray(ref particleState, particleHighWater);
+            GrowArray(ref childCounts, particleHighWater);
+            GrowArray(ref outRotation, particleHighWater);
+            GrowArray(ref outFlags, particleHighWater);
+            return allocated;
+        }
+
+        private static void EnsureTransformCapacity(int length)
+        {
+            GrowArray(ref readPosition, length);
+            GrowArray(ref readRotation, length);
+            GrowArray(ref readLocalPosition, length);
+            GrowArray(ref readLocalRotation, length);
+            GrowArray(ref readMatrix, length);
+            GrowArray(ref readValid, length);
+            GrowArray(ref readFrame, length);
+            if (ownerByTransform.Length < length)
+            {
+                int size = Mathf.NextPowerOfTwo(Math.Max(16, length));
+                Array.Resize(ref ownerByTransform, size);
+                Array.Resize(ref localByTransform, size);
+            }
+        }
+
+        private static void GrowArray<T>(ref NativeArray<T> array, int min)
+            where T : struct
+        {
+            if (min <= 0 || (array.IsCreated && array.Length >= min))
+            {
+                return;
+            }
+
+            int size = Mathf.NextPowerOfTwo(Math.Max(16, min));
+            var next = new NativeArray<T>(size, Allocator.Persistent);
+            if (array.IsCreated)
+            {
+                NativeArray<T>.Copy(array, next, array.Length);
+                array.Dispose();
+            }
+
+            array = next;
+        }
+
+        private static void PullParticleState(Slot slot)
+        {
+            int start = slot.ParticleStart;
+            for (int k = 0; k < slot.ParticleCount; k++)
+            {
+                object particle = slot.ParticleObjects[k];
+                particleState[start + k] = new ParticleState
+                {
+                    Position = ParticlePositionRef!(particle),
+                    PrevPosition = ParticlePrevPositionRef!(particle),
+                };
+            }
+
+            slot.PullState = false;
+            slot.NativeStateValid = true;
+        }
+
+        private static void PushParticleState(Slot slot)
+        {
+            if (!slot.NativeStateValid || slot.PullState || slot.ParticleCount == 0)
+            {
+                return;
+            }
+
+            int start = slot.ParticleStart;
+            for (int k = 0; k < slot.ParticleCount; k++)
+            {
+                object particle = slot.ParticleObjects[k];
+                ParticleState state = particleState[start + k];
+                ParticlePositionRef!(particle) = state.Position;
+                ParticlePrevPositionRef!(particle) = state.PrevPosition;
+            }
         }
 
         private static void Simulate()
@@ -519,12 +767,21 @@ namespace ROR_O.patches
             ColliderRefList.Clear();
             EnsureCapacity(ref frames, Pending.Count);
 
+            for (int i = 0; i < Pending.Count; i++)
+            {
+                Slot slot = Pending[i].Slot;
+                if (slot.Bone != null && slot.LayoutDirty)
+                {
+                    SyncSlot(slot);
+                }
+            }
+
             int frameCount = Time.frameCount;
             int jobCandidates = 0;
             for (int i = 0; i < Pending.Count; i++)
             {
                 Slot slot = Pending[i].Slot;
-                if (slot.Bone != null && !slot.UseVanilla && slot.Particles.Count == slot.ParticleObjects.Length)
+                if (slot.Bone != null && slot.Registered && !slot.UseVanilla && slot.Particles.Count == slot.ParticleObjects.Length)
                 {
                     jobCandidates++;
                 }
@@ -544,10 +801,9 @@ namespace ROR_O.patches
                 PendingBone pending = Pending[i];
                 Slot slot = pending.Slot;
                 DynamicBone bone = slot.Bone;
-                if (slot.UseVanilla || slot.Particles.Count != slot.ParticleObjects.Length)
+                if (!slot.Registered || slot.UseVanilla || slot.Particles.Count != slot.ParticleObjects.Length)
                 {
-                    TimeRef(bone) = pending.TimeBeforeStep;
-                    UpdateDynamicBones(bone, pending.DeltaTime);
+                    RunVanilla(pending);
                     Pending[i] = new PendingBone { Slot = slot, DeltaTime = -1f };
                     continue;
                 }
@@ -562,19 +818,15 @@ namespace ROR_O.patches
                     }
                 }
 
-                for (int t = 0; t < slot.TransformCount; t++)
+                int[] transformIndices = slot.TransformIndices;
+                for (int t = 0; t < transformIndices.Length; t++)
                 {
-                    readFrame[slot.TransformStart + t] = frameCount;
+                    readFrame[transformIndices[t]] = frameCount;
                 }
 
-                for (int k = 0; k < slot.ParticleObjects.Length; k++)
+                if (slot.PullState || !slot.NativeStateValid)
                 {
-                    object particle = slot.ParticleObjects[k];
-                    particleState[slot.ParticleStart + k] = new ParticleState
-                    {
-                        Position = ParticlePositionRef!(particle),
-                        PrevPosition = ParticlePrevPositionRef!(particle),
-                    };
+                    PullParticleState(slot);
                 }
 
                 int colliderStart = ColliderRefList.Count;
@@ -686,21 +938,23 @@ namespace ROR_O.patches
                 DynamicBone bone = slot.Bone;
                 if (frame.Invalid != 0)
                 {
+                    PushParticleState(slot);
+                    ReleaseSlot(slot);
                     slot.UseVanilla = true;
-                    registryDirty = true;
-                    TimeRef(bone) = pending.TimeBeforeStep;
-                    UpdateDynamicBones(bone, pending.DeltaTime);
+                    if (bone != null)
+                    {
+                        TimeRef(bone) = pending.TimeBeforeStep;
+                        UpdateDynamicBones(bone, pending.DeltaTime);
+                    }
+
+                    slot.PullState = true;
                     continue;
                 }
 
                 int start = slot.ParticleStart;
                 for (int k = 0; k < slot.ParticleObjects.Length; k++)
                 {
-                    object particle = slot.ParticleObjects[k];
                     ParticleState state = particleState[start + k];
-                    ParticlePositionRef!(particle) = state.Position;
-                    ParticlePrevPositionRef!(particle) = state.PrevPosition;
-
                     Transform? transform = slot.ParticleTransforms[k];
                     if (!transform)
                     {
@@ -835,6 +1089,19 @@ namespace ROR_O.patches
             DisposeArray(ref childCounts);
             DisposeArray(ref outRotation);
             DisposeArray(ref outFlags);
+            FreeParticleRanges.Clear();
+            particleHighWater = 0;
+            ownerByTransform = Array.Empty<Slot?>();
+            localByTransform = Array.Empty<int>();
+            for (int i = 0; i < Slots.Count; i++)
+            {
+                Slot slot = Slots[i];
+                slot.Registered = false;
+                slot.NativeStateValid = false;
+                slot.LayoutDirty = true;
+                slot.ParticleCount = 0;
+                slot.TransformIndices = Array.Empty<int>();
+            }
         }
 
         private static void DisposeAll()
@@ -1375,6 +1642,15 @@ namespace ROR_O.patches
             }
 
             return !DynamicBoneJobs.Active || !DynamicBoneJobs.TryEnqueue(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(DynamicBone), "ResetParticlesPosition")]
+    internal static class SyncDynamicBoneParticleResetPatch
+    {
+        private static void Postfix(DynamicBone __instance)
+        {
+            DynamicBoneJobs.NoteParticlesReset(__instance);
         }
     }
 }
