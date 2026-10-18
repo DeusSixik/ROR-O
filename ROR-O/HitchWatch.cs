@@ -6,7 +6,6 @@ using System.Text;
 using BepInEx;
 using BepInEx.Bootstrap;
 using BepInEx.Configuration;
-using HarmonyLib;
 using RoR2;
 using Unity.Profiling;
 using UnityEngine;
@@ -1250,20 +1249,21 @@ namespace ROR_O
         }
     }
 
-    [HarmonyPatch(typeof(RORO), "Awake")]
-    internal static class RegisterHitchWatchPatch
+    internal static class HitchWatchStartup
     {
-        private static void Postfix(RORO __instance)
+        // Called from RORO.Awake after PatchAll. A postfix on Awake never runs for that call,
+        // because the patch is installed only once Awake is already on the stack.
+        public static void Register(RORO plugin)
         {
-            HitchWatchSettings.Bind(__instance.Config);
+            HitchWatchSettings.Bind(plugin.Config);
             RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
             {
                 EnableHitchWatch = HitchWatchSettings.EnabledEntry,
                 HitchWatchTargetFps = HitchWatchSettings.TargetFpsEntry,
                 EnableMonoProfiler = HitchWatchSettings.MonoProfilerEntry,
             });
-            __instance.gameObject.AddComponent<ProfilerDumpNotice>();
-            __instance.gameObject.AddComponent<HitchWatch>();
+            plugin.gameObject.AddComponent<ProfilerDumpNotice>();
+            plugin.gameObject.AddComponent<HitchWatch>();
         }
     }
 }

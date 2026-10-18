@@ -75,6 +75,7 @@ namespace ROR_O
         public static bool EnableSpawnPrewarm => enableSpawnPrewarm?.Value ?? true;
 
         private static ConfigEntry<bool>? enableSpawnPrewarm;
+
         private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? dynamicBonesProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? genericIkProfile;
@@ -339,6 +340,8 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
+            HitchWatchStartup.Register(this);
+            patches.RegisterDynamicBoneJobsPatch.Register(this);
             gameObject.AddComponent<SpawnPrewarm>();
         }
     }
