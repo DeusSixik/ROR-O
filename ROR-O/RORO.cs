@@ -342,6 +342,7 @@ namespace ROR_O
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
             HitchWatchStartup.Register(this);
             patches.RegisterDynamicBoneJobsPatch.Register(this);
+            patches.RegisterSteamP2PPatch.Register(this);
             gameObject.AddComponent<SpawnPrewarm>();
         }
     }

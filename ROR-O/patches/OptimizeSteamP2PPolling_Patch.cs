@@ -241,18 +241,18 @@ namespace ROR_O.patches
         }
     }
 
-    [HarmonyPatch(typeof(RORO), "Awake")]
     internal static class RegisterSteamP2PPatch
     {
-        private static void Postfix(RORO __instance)
+        // Called from RORO.Awake after PatchAll. A postfix on that Awake cannot see the call that installs it.
+        public static void Register(RORO plugin)
         {
-            SteamP2PSettings.Bind(__instance.Config);
+            SteamP2PSettings.Bind(plugin.Config);
             RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
             {
                 EnableThreadedSteamP2P = SteamP2PSettings.ThreadedEntry,
                 EnableNetworkDebug = SteamP2PSettings.DebugEntry,
             });
-            __instance.gameObject.AddComponent<NetworkDebugDriver>();
+            plugin.gameObject.AddComponent<NetworkDebugDriver>();
         }
     }
 }
