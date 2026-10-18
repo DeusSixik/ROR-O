@@ -1,3 +1,4 @@
+#if DEBUG
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -168,3 +169,4 @@ namespace ROR_O
         }
     }
 }
+#endif

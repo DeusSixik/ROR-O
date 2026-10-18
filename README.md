@@ -90,13 +90,13 @@ Main sections currently exposed:
 - `[Spawns]`
 - `[Profiler]`
 
-`[Profiler]` includes an optional Hitch Watch and a switch for the separately installed Mono profiler.
+`[Profiler]` includes an optional Hitch Watch and a switch for the separately installed Mono profiler (Dev builds only).
 
 ## Integrations
 
 - Looking Glass
 - Risk of Options
-- Mono Profiler
+- Mono Profiler (Dev builds only)
 
 ## Development
 

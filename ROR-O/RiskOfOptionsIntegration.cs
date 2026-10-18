@@ -71,7 +71,11 @@ namespace ROR_O
             try
             {
                 var menu = new Menu(assembly);
+#if DEBUG
                 menu.SetDescription("Performance options for damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately. The Mono Profiler switch applies on the next launch.");
+#else
+                menu.SetDescription("Performance options for damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately.");
+#endif
                 menu.SetIcon(LoadIcon());
                 AddEntries(menu, catalog);
                 RORO.GlobalLogger?.LogInfo("ROR-O settings were added to Risk of Options.");
@@ -124,7 +128,11 @@ namespace ROR_O
             menu.CheckBox(catalog.EnableSpawnPrewarm);
             menu.CheckBox(catalog.EnableHitchWatch);
             menu.IntSlider(catalog.HitchWatchTargetFps, 30, 240, () => catalog.EnableHitchWatch?.Value != true);
+#if DEBUG
             menu.CheckBox(catalog.EnableMonoProfiler);
+#else
+            menu.CheckBox(catalog.EnableMonoProfiler, () => true);
+#endif
         }
 
         private static Sprite? LoadIcon()

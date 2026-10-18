@@ -1194,6 +1194,9 @@ namespace ROR_O
 
     internal static class HitchWatchSettings
     {
+        private const string MonoProfilerDescription =
+            "On the next launch, load the separately installed BepInEx.Debug Mono Profiler. ROR-O runs normally when this is off or when the profiler is not installed. The switch does not take effect until the game is restarted. (The profiler is only built in Dev builds)";
+
         private static ConfigEntry<bool>? enabled;
         private static ConfigEntry<int>? targetFps;
         private static ConfigEntry<bool>? monoProfiler;
@@ -1222,18 +1225,26 @@ namespace ROR_O
 
         public static void Bind(ConfigFile config)
         {
+#if DEBUG
             bool profilerSettingExists = ProfilerToggle.ConfigHasEnableSetting(config.ConfigFilePath);
             monoProfiler = config.Bind(
                 "Profiler",
                 "Enable Mono Profiler",
                 ProfilerToggle.IsLoaderInstalledInPatchers(),
-                "On the next launch, load the separately installed BepInEx.Debug Mono Profiler. ROR-O runs normally when this is off or when the profiler is not installed. The switch does not take effect until the game is restarted.");
+                MonoProfilerDescription);
             if (profilerSettingExists)
             {
                 ProfilerToggle.Apply(monoProfiler.Value);
             }
 
             monoProfiler.SettingChanged += (_, __) => ProfilerToggle.Apply(monoProfiler.Value);
+#else
+            monoProfiler = config.Bind(
+                "Profiler",
+                "Enable Mono Profiler",
+                false,
+                MonoProfilerDescription);
+#endif
 
             enabled = config.Bind(
                 "Profiler",
