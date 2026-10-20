@@ -439,36 +439,64 @@ namespace ROR_O.patches
 
     internal sealed class NetworkDebugDriver : MonoBehaviour
     {
-        private const float RefreshIntervalSeconds = 0.25f;
+        // The card is handed over by its own UpdateInfo and kept. A destroyed card compares false.
+        private static readonly List<AllyCardController> SeenCards = new List<AllyCardController>(8);
 
-        private float nextRefreshTime;
+        private bool overlayWasOn;
 
-        private void Update()
+        internal static void Note(AllyCardController card)
         {
-            NetworkLinkDebug.PublishLocalVersion();
-            NetworkLinkDebug.Tick();
-            if (Time.unscaledTime < nextRefreshTime)
+            if (SeenCards.Contains(card))
             {
                 return;
             }
 
-            nextRefreshTime = Time.unscaledTime + RefreshIntervalSeconds;
-            AllyCardController[] cards = FindObjectsOfType<AllyCardController>();
-            for (int i = 0; i < cards.Length; i++)
+            SeenCards.Add(card);
+        }
+
+        private void Update()
+        {
+            NetworkLinkDebug.PublishLocalVersion();
+            bool sampled = NetworkLinkDebug.Tick();
+            bool overlay = SteamP2PSettings.DebugOverlay;
+            if (!overlay)
             {
-                AllyCardController card = cards[i];
-                if (card == null)
+                if (overlayWasOn)
                 {
+                    WriteSeen();
+                    overlayWasOn = false;
+                }
+
+                return;
+            }
+
+            overlayWasOn = true;
+            if (!sampled)
+            {
+                return;
+            }
+
+            WriteSeen();
+        }
+
+        private static void WriteSeen()
+        {
+            for (int i = SeenCards.Count - 1; i >= 0; i--)
+            {
+                AllyCardController card = SeenCards[i];
+                if (!card)
+                {
+                    SeenCards.RemoveAt(i);
                     continue;
                 }
 
-                if (!IsPlayer(card.sourceMaster))
+                if (IsPlayer(card.sourceMaster))
                 {
-                    NetworkDebugText.Clear(card.nameLabel);
+                    NetworkDebugText.Apply(card.nameLabel, SteamIdOf(card.sourceMaster));
                     continue;
                 }
 
-                NetworkDebugText.Apply(card.nameLabel, SteamIdOf(card.sourceMaster));
+                NetworkDebugText.Clear(card.nameLabel);
             }
         }
 
@@ -489,6 +517,7 @@ namespace ROR_O.patches
     {
         private static void Postfix(AllyCardController __instance)
         {
+            NetworkDebugDriver.Note(__instance);
             if (!NetworkDebugDriver.IsPlayer(__instance.sourceMaster))
             {
                 NetworkDebugText.Clear(__instance.nameLabel);

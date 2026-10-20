@@ -201,7 +201,7 @@ namespace ROR_O.patches
             return Time.unscaledTime - started < VersionWaitSeconds;
         }
 
-        public static void Tick()
+        public static bool Tick()
         {
             if (!SteamP2PSettings.DebugOverlay)
             {
@@ -210,12 +210,12 @@ namespace ROR_O.patches
                     Clear();
                 }
 
-                return;
+                return false;
             }
 
             if (Time.unscaledTime < nextSampleTime)
             {
-                return;
+                return false;
             }
 
             nextSampleTime = Time.unscaledTime + SampleIntervalSeconds;
@@ -235,6 +235,8 @@ namespace ROR_O.patches
             {
                 RORO.GlobalLogger?.LogWarning($"Network debug sample failed: {exception.Message}");
             }
+
+            return true;
         }
 
         public static string? Describe(ulong steamId)
