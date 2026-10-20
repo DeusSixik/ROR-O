@@ -439,7 +439,8 @@ namespace ROR_O.patches
 
     internal sealed class NetworkDebugDriver : MonoBehaviour
     {
-        // The card is handed over by its own UpdateInfo and kept. A destroyed card compares false.
+        // The card is handed over by its own UpdateInfo and kept. A destroyed card compares false
+        // and is dropped on the next driver update, including while the debug overlay is off.
         private static readonly List<AllyCardController> SeenCards = new List<AllyCardController>(8);
 
         private bool overlayWasOn;
@@ -466,6 +467,10 @@ namespace ROR_O.patches
                     WriteSeen();
                     overlayWasOn = false;
                 }
+                else
+                {
+                    DropDestroyed();
+                }
 
                 return;
             }
@@ -473,10 +478,36 @@ namespace ROR_O.patches
             overlayWasOn = true;
             if (!sampled)
             {
+                DropDestroyed();
                 return;
             }
 
             WriteSeen();
+        }
+
+        private static void DropDestroyed()
+        {
+            int write = 0;
+            for (int i = 0; i < SeenCards.Count; i++)
+            {
+                AllyCardController card = SeenCards[i];
+                if (!card)
+                {
+                    continue;
+                }
+
+                if (write != i)
+                {
+                    SeenCards[write] = card;
+                }
+
+                write++;
+            }
+
+            if (write < SeenCards.Count)
+            {
+                SeenCards.RemoveRange(write, SeenCards.Count - write);
+            }
         }
 
         private static void WriteSeen()
