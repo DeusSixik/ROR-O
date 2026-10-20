@@ -339,6 +339,7 @@ namespace ROR_O
 
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
+            patches.OptimizeSphereSearch.Install(harmony);
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
             patches.SkipUnchangedBuffTimerPatch.Register();
             HitchWatchStartup.Register(this);
