@@ -283,7 +283,7 @@ namespace ROR_O
                 "Spawns",
                 "Prewarm Stage Spawns",
                 true,
-                "After a stage starts, creates each monster prefab from that stage and the pickup shell once, away from the map, then removes them. One prefab per frame, so the first real spawn is less likely to hitch. Takes effect on the next stage.");
+                "Preloads the animator, avatar, and skins of monsters this stage can spawn, one monster per frame. Uses the game's own master preload and also includes bosses from that list. Takes effect on the next stage.");
 
             RiskOfOptionsIntegration.Hold(new RiskOfOptionsCatalog
             {
