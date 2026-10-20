@@ -50,40 +50,111 @@ namespace ROR_O.patches
         private static readonly StringBuilder PublishBuilder = new StringBuilder(256);
         private static readonly FieldInfo? NetworkClientField = AccessTools.Field(typeof(NetworkManager), "client");
 
+        private static readonly Dictionary<ulong, VersionProbe> VersionProbes = new Dictionary<ulong, VersionProbe>();
+        private static readonly Dictionary<ulong, float> VersionWaitStart = new Dictionary<ulong, float>();
+        private static readonly Dictionary<ulong, LinkTextCache> LinkText = new Dictionary<ulong, LinkTextCache>();
+
         private static float nextSampleTime;
         private static float nextPublishTime;
         private static bool memberDataPublished;
         private static string publishedValue = "";
         private static string publishedVersion = "";
         private static ulong publishedVersionLobby;
+        private static int trackedMemberCount = -1;
+        private static int republishLeft;
+        private static float nextRepublishTime;
+        private static float nextSelfCheckTime;
+        private static string cachedBuildId = "";
+        private static bool buildIdCached;
+
+        private const float VersionProbeIntervalSeconds = 1f;
+        private const float VersionWaitSeconds = 5f;
+        private const float RepublishDelaySeconds = 1.5f;
+        private const int RepublishBursts = 3;
+        private const float SelfCheckIntervalSeconds = 5f;
+        private const string NoSessionText = "no session";
+        private const string ToHostNoDataText = "to host · no data";
+
+        private struct VersionProbe
+        {
+            public string Value;
+            public float NextProbeTime;
+            public bool Known;
+        }
+
+        private struct LinkTextCache
+        {
+            public NetworkLinkSample Sample;
+            public bool ReportedByHost;
+            public bool HasSample;
+            public string Text;
+        }
 
         // Vanilla only writes one lobby-wide build_id, which is the host. A player with this mod also
-        // publishes their own build on their lobby member data. Other non-mod players never send a version.
+        // publishes their own build on their lobby member data. Steam does not deliver member data that
+        // was set before someone joined, so a new player would otherwise see an earlier client as empty.
+        // Each membership change publishes the local build again, a few times, until the new peer can read it.
         public static void PublishLocalVersion()
         {
             Lobby? lobby = Client.Instance?.Lobby;
             if (lobby == null || !lobby.IsValid)
             {
-                publishedVersion = "";
-                publishedVersionLobby = 0;
+                if (publishedVersionLobby != 0)
+                {
+                    ResetVersionState();
+                }
+
                 return;
             }
 
             ulong lobbyId = lobby.CurrentLobby;
             if (lobbyId != publishedVersionLobby)
             {
+                ResetVersionState();
                 publishedVersionLobby = lobbyId;
-                publishedVersion = "";
             }
 
             string mine = LocalBuildId();
-            if (mine.Length == 0 || mine == publishedVersion)
+            if (mine.Length == 0)
+            {
+                return;
+            }
+
+            int members = lobby.NumMembers;
+            if (members != trackedMemberCount)
+            {
+                trackedMemberCount = members;
+                republishLeft = RepublishBursts;
+                nextRepublishTime = 0f;
+            }
+            else if (republishLeft <= 0 && publishedVersion == mine && LocalSteamId != 0 && Time.unscaledTime >= nextSelfCheckTime)
+            {
+                nextSelfCheckTime = Time.unscaledTime + SelfCheckIntervalSeconds;
+                string visible = lobby.GetMemberData(LocalSteamId, VersionKey);
+                if (!string.Equals(visible, mine, StringComparison.Ordinal))
+                {
+                    republishLeft = 1;
+                    nextRepublishTime = 0f;
+                }
+            }
+
+            if (republishLeft <= 0 && publishedVersion == mine)
+            {
+                return;
+            }
+
+            if (republishLeft > 0 && Time.unscaledTime < nextRepublishTime)
             {
                 return;
             }
 
             lobby.SetMemberData(VersionKey, mine);
             publishedVersion = mine;
+            if (republishLeft > 0)
+            {
+                republishLeft--;
+                nextRepublishTime = Time.unscaledTime + RepublishDelaySeconds;
+            }
         }
 
         public static bool TryDescribeVersion(ulong steamId, out string version, out bool mismatch)
@@ -101,27 +172,33 @@ namespace ROR_O.patches
                 return version.Length > 0;
             }
 
-            Lobby? lobby = Client.Instance?.Lobby;
-            if (lobby == null || !lobby.IsValid)
+            if (!TryReadRemoteVersion(steamId, out version))
             {
+                version = "";
                 return false;
             }
 
-            string reported = lobby.GetMemberData(steamId, VersionKey);
-            if (!IsVersionToken(reported) && IsLobbyHost(lobby, steamId))
-            {
-                reported = lobby.CurrentLobbyData != null ? lobby.CurrentLobbyData.GetData("build_id") : "";
-            }
-
-            if (!IsVersionToken(reported))
-            {
-                return false;
-            }
-
-            version = reported;
             string mine = LocalBuildId();
             mismatch = mine.Length > 0 && !string.Equals(mine, version, StringComparison.Ordinal);
             return true;
+        }
+
+        // A player who already published a build keeps that value if Steam briefly returns an empty key.
+        // Someone with no build yet stays unknown, so the label can still say that the version is missing.
+        public static bool ShouldWaitForVersion(ulong steamId)
+        {
+            if (steamId == 0 || steamId == LocalSteamId)
+            {
+                return false;
+            }
+
+            if (!VersionWaitStart.TryGetValue(steamId, out float started))
+            {
+                VersionWaitStart[steamId] = Time.unscaledTime;
+                return true;
+            }
+
+            return Time.unscaledTime - started < VersionWaitSeconds;
         }
 
         public static void Tick()
@@ -169,31 +246,140 @@ namespace ROR_O.patches
 
             if (LocalLinks.TryGetValue(steamId, out NetworkLinkSample local))
             {
-                return Format(local, reportedByHost: false);
+                return CachedFormat(steamId, local, reportedByHost: false);
             }
 
             if (HostReportedLinks.TryGetValue(steamId, out NetworkLinkSample reported))
             {
-                return Format(reported, reportedByHost: true);
+                return CachedFormat(steamId, reported, reportedByHost: true);
             }
 
             ulong hostSteamId = FindHostSteamId();
             if (!NetworkServer.active && hostSteamId != 0 && steamId != hostSteamId)
             {
-                return "to host · no data";
+                return ToHostNoDataText;
             }
 
-            return "no session";
+            return NoSessionText;
+        }
+
+        private static void ResetVersionState()
+        {
+            publishedVersion = "";
+            publishedVersionLobby = 0;
+            trackedMemberCount = -1;
+            republishLeft = 0;
+            nextRepublishTime = 0f;
+            nextSelfCheckTime = 0f;
+            VersionProbes.Clear();
+            VersionWaitStart.Clear();
+        }
+
+        private static bool TryReadRemoteVersion(ulong steamId, out string version)
+        {
+            version = "";
+            float now = Time.unscaledTime;
+            if (VersionProbes.TryGetValue(steamId, out VersionProbe probe) && now < probe.NextProbeTime)
+            {
+                version = probe.Value;
+                return probe.Known;
+            }
+
+            Lobby? lobby = Client.Instance?.Lobby;
+            if (lobby == null || !lobby.IsValid)
+            {
+                return false;
+            }
+
+            string reported = lobby.GetMemberData(steamId, VersionKey);
+            if (!IsVersionToken(reported) && IsKnownHost(steamId))
+            {
+                reported = lobby.CurrentLobbyData != null ? lobby.CurrentLobbyData.GetData("build_id") : "";
+            }
+
+            if (!IsVersionToken(reported))
+            {
+                if (probe.Known)
+                {
+                    probe.NextProbeTime = now + VersionProbeIntervalSeconds;
+                    VersionProbes[steamId] = probe;
+                    version = probe.Value;
+                    return true;
+                }
+
+                VersionProbes[steamId] = new VersionProbe
+                {
+                    Value = "",
+                    NextProbeTime = now + VersionProbeIntervalSeconds,
+                    Known = false,
+                };
+                return false;
+            }
+
+            if (!probe.Known || !string.Equals(probe.Value, reported, StringComparison.Ordinal))
+            {
+                probe.Value = reported;
+            }
+
+            probe.Known = true;
+            probe.NextProbeTime = now + VersionProbeIntervalSeconds;
+            VersionProbes[steamId] = probe;
+            version = probe.Value;
+            return true;
+        }
+
+        private static string CachedFormat(ulong steamId, NetworkLinkSample sample, bool reportedByHost)
+        {
+            if (LinkText.TryGetValue(steamId, out LinkTextCache cached)
+                && cached.HasSample
+                && cached.ReportedByHost == reportedByHost
+                && SameSample(cached.Sample, sample))
+            {
+                return cached.Text;
+            }
+
+            string text = Format(sample, reportedByHost);
+            LinkText[steamId] = new LinkTextCache
+            {
+                Sample = sample,
+                ReportedByHost = reportedByHost,
+                HasSample = true,
+                Text = text,
+            };
+            return text;
+        }
+
+        private static bool SameSample(NetworkLinkSample left, NetworkLinkSample right)
+        {
+            return left.Active == right.Active
+                && left.Connecting == right.Connecting
+                && left.UsingRelay == right.UsingRelay
+                && left.Error == right.Error
+                && left.BytesQueued == right.BytesQueued
+                && left.PacketsQueued == right.PacketsQueued
+                && left.RttMilliseconds == right.RttMilliseconds;
         }
 
         private static ulong LocalSteamId => Client.Instance?.SteamId ?? 0;
 
         private static string LocalBuildId()
         {
+            if (buildIdCached)
+            {
+                return cachedBuildId;
+            }
+
             try
             {
                 string buildId = RoR2Application.GetBuildId();
-                return IsVersionToken(buildId) ? buildId : "";
+                if (!IsVersionToken(buildId))
+                {
+                    return "";
+                }
+
+                cachedBuildId = buildId;
+                buildIdCached = true;
+                return cachedBuildId;
             }
             catch (Exception)
             {
@@ -258,6 +444,7 @@ namespace ROR_O.patches
         {
             LocalLinks.Clear();
             HostReportedLinks.Clear();
+            LinkText.Clear();
             if (memberDataPublished)
             {
                 TrySetMemberData("");
