@@ -52,7 +52,38 @@ namespace ROR_O
         private const string PluginGuid = "com.rune580.riskofoptions";
         private const BindingFlags FieldFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.FlattenHierarchy;
 
-        public static void TryRegister(RiskOfOptionsCatalog catalog)
+        private static readonly RiskOfOptionsCatalog Pending = new RiskOfOptionsCatalog();
+        private static bool published;
+
+        public static void Hold(RiskOfOptionsCatalog catalog)
+        {
+            Absorb(catalog);
+        }
+
+        public static void Publish()
+        {
+            if (published)
+            {
+                return;
+            }
+
+            published = true;
+            Write(Pending);
+        }
+
+        private static void Absorb(RiskOfOptionsCatalog catalog)
+        {
+            foreach (PropertyInfo property in typeof(RiskOfOptionsCatalog).GetProperties(BindingFlags.Instance | BindingFlags.Public))
+            {
+                object? value = property.GetValue(catalog);
+                if (value != null)
+                {
+                    property.SetValue(Pending, value);
+                }
+            }
+        }
+
+        private static void Write(RiskOfOptionsCatalog catalog)
         {
             if (!Chainloader.PluginInfos.ContainsKey(PluginGuid))
             {

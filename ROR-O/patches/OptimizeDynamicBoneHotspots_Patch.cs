@@ -5,7 +5,6 @@ using UnityEngine;
 
 namespace ROR_O.patches
 {
-    [HarmonyPatch]
     internal static class OptimizeDynamicBoneLateUpdatePatch
     {
         private sealed class DynamicBoneState
@@ -14,9 +13,6 @@ namespace ROR_O.patches
         }
 
         private static readonly Type? DynamicBoneType = AccessTools.TypeByName("DynamicBone");
-        private static readonly MethodInfo? DynamicBoneLateUpdateMethod =
-            DynamicBoneType != null ? AccessTools.DeclaredMethod(DynamicBoneType, "LateUpdate") : null;
-
         private static readonly FieldInfo? DynamicBoneRootField =
             DynamicBoneType != null ? AccessTools.Field(DynamicBoneType, "m_Root") : null;
 
@@ -29,25 +25,7 @@ namespace ROR_O.patches
         private static int cachedCameraFrame = int.MinValue;
         private static Camera? cachedMainCamera;
 
-        private static bool Prepare()
-        {
-            if (DynamicBoneLateUpdateMethod == null)
-            {
-                RORO.GlobalLogger?.LogWarning("DynamicBone.LateUpdate not found, skipping DynamicBone optimization.");
-                return false;
-            }
-
-            RORO.GlobalLogger?.LogInfo("DynamicBone.LateUpdate optimization enabled.");
-            return true;
-        }
-
-        private static MethodBase TargetMethod()
-        {
-            return DynamicBoneLateUpdateMethod!;
-        }
-
-        [HarmonyPrefix]
-        private static bool Prefix(Component __instance)
+        internal static bool ShouldSimulate(Component __instance)
         {
             if (!__instance)
             {

@@ -1267,7 +1267,7 @@ namespace ROR_O
         public static void Register(RORO plugin)
         {
             HitchWatchSettings.Bind(plugin.Config);
-            RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
+            RiskOfOptionsIntegration.Hold(new RiskOfOptionsCatalog
             {
                 EnableHitchWatch = HitchWatchSettings.EnabledEntry,
                 HitchWatchTargetFps = HitchWatchSettings.TargetFpsEntry,

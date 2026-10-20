@@ -285,7 +285,7 @@ namespace ROR_O
                 true,
                 "After a stage starts, creates each monster prefab from that stage and the pickup shell once, away from the map, then removes them. One prefab per frame, so the first real spawn is less likely to hitch. Takes effect on the next stage.");
 
-            RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
+            RiskOfOptionsIntegration.Hold(new RiskOfOptionsCatalog
             {
                 DamageNumbersProfile = damageNumbersProfile,
                 EnableDamageNumberLoadShedding = enableDamageNumberLoadShedding,
@@ -343,6 +343,7 @@ namespace ROR_O
             HitchWatchStartup.Register(this);
             patches.RegisterDynamicBoneJobsPatch.Register(this);
             patches.RegisterSteamP2PPatch.Register(this);
+            RiskOfOptionsIntegration.Publish();
             gameObject.AddComponent<SpawnPrewarm>();
         }
     }
