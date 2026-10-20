@@ -1596,14 +1596,40 @@ namespace ROR_O.patches
         }
     }
 
+    // One patch for the method. Separate Harmony classes each rewrite LateUpdate again while plugins load.
     [HarmonyPatch(typeof(DynamicBone), "LateUpdate")]
-    [HarmonyPriority(Priority.First)]
-    public static class TimeDynamicBoneLateUpdatePatch
+    public static class DynamicBoneLateUpdatePatch
     {
-        private static void Prefix(out long __state)
+        private static bool announced;
+
+        private static bool Prepare()
+        {
+            if (announced)
+            {
+                return true;
+            }
+
+            announced = true;
+            if (AccessTools.DeclaredMethod(typeof(DynamicBone), "LateUpdate") == null)
+            {
+                RORO.GlobalLogger?.LogWarning("DynamicBone.LateUpdate not found, skipping DynamicBone optimization.");
+                return false;
+            }
+
+            RORO.GlobalLogger?.LogInfo("DynamicBone.LateUpdate optimization enabled.");
+            return true;
+        }
+
+        private static bool Prefix(DynamicBone __instance, out long __state)
         {
             DynamicBoneJobs.Stats.CountFrame();
             __state = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (!OptimizeDynamicBoneLateUpdatePatch.ShouldSimulate(__instance))
+            {
+                return false;
+            }
+
+            return !DynamicBoneJobs.Active || !DynamicBoneJobs.TryEnqueue(__instance);
         }
 
         private static void Postfix(long __state)
@@ -1625,23 +1651,8 @@ namespace ROR_O.patches
                 "Simulates all DynamicBones that update in a frame together on Unity worker threads after LateUpdate, leaving only the final transform writes on the main thread. Takes effect immediately.");
             DynamicBoneJobs.Bind(entry);
             SettingsProfiles.AddLate("Dynamic Bones", entry, true, true, true);
-            RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog { EnableDynamicBoneJobs = entry });
+            RiskOfOptionsIntegration.Hold(new RiskOfOptionsCatalog { EnableDynamicBoneJobs = entry });
             DynamicBoneJobs.Install();
-        }
-    }
-
-    [HarmonyPatch(typeof(DynamicBone), "LateUpdate")]
-    [HarmonyPriority(Priority.Last)]
-    public static class QueueDynamicBoneJobsPatch
-    {
-        private static bool Prefix(DynamicBone __instance, bool __runOriginal)
-        {
-            if (!__runOriginal)
-            {
-                return false;
-            }
-
-            return !DynamicBoneJobs.Active || !DynamicBoneJobs.TryEnqueue(__instance);
         }
     }
 

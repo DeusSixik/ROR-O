@@ -247,7 +247,7 @@ namespace ROR_O.patches
         public static void Register(RORO plugin)
         {
             SteamP2PSettings.Bind(plugin.Config);
-            RiskOfOptionsIntegration.TryRegister(new RiskOfOptionsCatalog
+            RiskOfOptionsIntegration.Hold(new RiskOfOptionsCatalog
             {
                 EnableThreadedSteamP2P = SteamP2PSettings.ThreadedEntry,
                 EnableNetworkDebug = SteamP2PSettings.DebugEntry,
