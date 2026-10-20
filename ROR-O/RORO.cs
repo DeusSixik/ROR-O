@@ -340,6 +340,7 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
+            patches.SkipUnchangedBuffTimerPatch.Register();
             HitchWatchStartup.Register(this);
             patches.RegisterDynamicBoneJobsPatch.Register(this);
             patches.RegisterSteamP2PPatch.Register(this);

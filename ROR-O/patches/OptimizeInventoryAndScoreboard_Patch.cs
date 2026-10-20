@@ -3,6 +3,7 @@ using System.Reflection;
 using HarmonyLib;
 using LookingGlass.BuffTimers;
 using LookingGlass.StatsDisplay;
+using MonoMod.RuntimeDetour;
 using RoR2;
 using RoR2.UI;
 using TMPro;
@@ -240,7 +241,8 @@ namespace ROR_O.patches
 
     // LookingGlass writes a new timer string on every buff layout. The shown number only changes ten times a second,
     // or once a second without decimals, so identical writes were rebuilding the buff text.
-    [HarmonyPatch]
+    // BuffTimersClass.UpdateLayout is the method a MonoMod hook calls. Harmony rewrites that method with an IL hook
+    // and deadlocks with the detour while plugins load, so the LookingGlass hook is replaced instead.
     public static class SkipUnchangedBuffTimerPatch
     {
         private sealed class ShownTimer
@@ -255,35 +257,76 @@ namespace ROR_O.patches
         private static readonly FixedConditionalWeakTable<Component, ShownTimer> ShownByIcon =
             new FixedConditionalWeakTable<Component, ShownTimer>();
 
-        private static bool Prepare()
+        private static Hook? layoutHook;
+
+        internal static void Register()
         {
-            bool found = TargetMethod() != null;
-            if (found)
+            if (layoutHook != null)
             {
-                RORO.GlobalLogger?.LogInfo("Buff timer text updates are skipped while the shown value is unchanged.");
+                return;
             }
 
-            return found;
-        }
-
-        private static MethodBase? TargetMethod()
-        {
             Type? type = AccessTools.TypeByName("LookingGlass.BuffTimers.BuffTimersClass");
-            return type == null ? null : AccessTools.DeclaredMethod(type, "UpdateLayout");
+            FieldInfo? hookField = type == null ? null : AccessTools.Field(type, "overrideHook");
+            Hook? existing = hookField?.GetValue(null) as Hook;
+            if (existing == null || hookField == null)
+            {
+                return;
+            }
+
+            MethodInfo? layout = AccessTools.DeclaredMethod(typeof(BuffDisplay), nameof(BuffDisplay.UpdateLayout));
+            MethodInfo? replacement = AccessTools.DeclaredMethod(typeof(SkipUnchangedBuffTimerPatch), nameof(UpdateLayout));
+            if (layout == null || replacement == null)
+            {
+                return;
+            }
+
+            try
+            {
+                existing.Undo();
+            }
+            catch (Exception ex)
+            {
+                RORO.GlobalLogger?.LogError($"Buff timer text updates were left on the LookingGlass hook: {ex}");
+                return;
+            }
+
+            try
+            {
+                layoutHook = new Hook(layout, replacement);
+            }
+            catch (Exception ex)
+            {
+                existing.Apply();
+                RORO.GlobalLogger?.LogError($"Buff timer text updates were left on the LookingGlass hook: {ex}");
+                return;
+            }
+
+            try
+            {
+                existing.Free();
+            }
+            catch (Exception ex)
+            {
+                RORO.GlobalLogger?.LogWarning($"LookingGlass buff timer hook could not be released: {ex.Message}");
+            }
+
+            hookField.SetValue(null, null);
+            RORO.GlobalLogger?.LogInfo("Buff timer text updates are skipped while the shown value is unchanged.");
         }
 
-        private static bool Prefix(Action<BuffDisplay> orig, BuffDisplay self)
+        private static void UpdateLayout(Action<BuffDisplay> orig, BuffDisplay self)
         {
             orig(self);
             if (BuffTimersClass.buffTimers == null || !BuffTimersClass.buffTimers.Value || !self || !self.source)
             {
-                return false;
+                return;
             }
 
             CharacterBody? body = StatsDisplayClass.cachedUserBody;
             if (!body)
             {
-                return false;
+                return;
             }
 
             bool decimals = BuffTimersClass.buffTimerDecimal != null && BuffTimersClass.buffTimerDecimal.Value;
@@ -350,8 +393,6 @@ namespace ROR_O.patches
                 shown.FontSize = fontSize;
                 shown.Text.text = text;
             }
-
-            return false;
         }
     }
 }
