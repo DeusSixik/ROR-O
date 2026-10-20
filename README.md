@@ -118,11 +118,33 @@ A unique profile name is enough. Profiles outside AppData need `ProfileRoot`, or
 
 Debug copies `ROR-O.dll` into the profile. Release also writes `ROR-O/bin/Release/netstandard2.1/ROR_O-v1.0.4.zip`. Use `-p:DeployOnBuild=false` to skip the copy.
 
-## Known limitations
+## Known issues
 
-- Loading spikes related to Addressables can still happen
-- The first visible spawn of a monster can still hitch
-- Audio-heavy scenes can still be limited by `AkGameObj` / Wwise costs
+- **SeekersPatcher.** Both mods patch the same game code. Together they can break those methods.
+- **Content mods.** Added survivors, monsters, items, and UI can hit patched methods in untested ways.
+- **Stage changes.** Prefab warming can freeze the game while the next stage loads.
+- **Profilers.** Hitch Watch and the Mono profiler both miss part of a frame. One has no managed call trees. The other has no per-frame tail. Running both adds profiler overhead to the times.
+- **Allocations in the patches.** Some patches still allocate (lists, arrays, strings) on the frames they are meant to make cheaper (report pls). 
+- **Game updates and stolen bytes.** A game update may takes a run of bytes from a method and replaces them with a jump. After an update that run can end mid-instruction and pull in neighboring bytes, inside the method or from the next one. The patch then runs those bytes.
+
+## Credits
+
+### Code
+
+- **DeusSixik** — main developer. Review, and guy how know the code runs)))
+- **Krupter** (Ксения Мазерати) — bugs, profilers, and debugging.
+
+### Testing
+
+- **Дарья Литовская** — plays almost every day to help debug. Several hundred hours...
+- **Solderyn** — runs the measurements
+- **Arisa** — playtesting
+
+## Contributing
+
+Issues and merge requests are welcome. People who help that way are listed here.
+
+- Your name. Open an issue or a merge request.
 
 ## Source
 
@@ -134,5 +156,5 @@ GitHub repository:
 
 See `LICENSE.txt`.
 
-## Support Me
+## Support US
 - [Boosty](https://boosty.to/sixik)
