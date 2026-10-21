@@ -1,33 +1,69 @@
-using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
+using HarmonyLib;
 using RoR2;
+using RoR2.Networking;
 using UnityEngine;
+using UnityEngine.Networking;
+using UnityEngine.SceneManagement;
 
 namespace ROR_O
 {
-    // The first time a monster or pickup is created, its prefab pays Awake on the combat frame.
-    // After the stage starts, each of those prefabs is created once away from the map and removed,
-    // one per frame, so that cost does not land on a fight.
+    // The first spawn of a monster pays CharacterBody.PreloadAssets: animator, avatar, and skins.
+    // The game already does that for the selected non-boss masters, all inside one network message.
+    // This spreads the same call across frames and includes bosses from the stage's resolved list.
+    // Instantiating a prefab and destroying it does not keep that load, and Awake runs again on the real spawn.
     internal sealed class SpawnPrewarm : MonoBehaviour
     {
-        private static readonly Vector3 WarmPosition = new Vector3(0f, -4000f, 0f);
-        private const int PrefabCap = 80;
+        private static readonly List<CharacterMaster> pending = new List<CharacterMaster>();
+        private static readonly HashSet<CharacterMaster> queued = new HashSet<CharacterMaster>();
+        private static readonly HashSet<CharacterMaster> done = new HashSet<CharacterMaster>();
 
-        private Coroutine? running;
+        private static int cursor;
+        private static int warmedSinceLog;
+
+        internal static void Enqueue(CharacterMaster master)
+        {
+            if (!master || done.Contains(master) || !queued.Add(master))
+            {
+                return;
+            }
+
+            pending.Add(master);
+        }
 
         private void OnEnable()
         {
             Stage.onStageStartGlobal += OnStageStart;
+            SceneManager.sceneLoaded += OnSceneLoaded;
         }
 
         private void OnDisable()
         {
             Stage.onStageStartGlobal -= OnStageStart;
-            if (running != null)
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+            ResetQueue();
+        }
+
+        private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            if (mode != LoadSceneMode.Single)
             {
-                StopCoroutine(running);
-                running = null;
+                return;
             }
+
+            // Fires before Start on the new scene, so the stage list and the network preload
+            // message are still ahead of this. Drop the previous stage and preload the next one.
+            ResetQueue();
+        }
+
+        private static void ResetQueue()
+        {
+            pending.Clear();
+            queued.Clear();
+            done.Clear();
+            cursor = 0;
+            warmedSinceLog = 0;
         }
 
         private void OnStageStart(Stage stage)
@@ -37,203 +73,120 @@ namespace ROR_O
                 return;
             }
 
-            if (running != null)
-            {
-                StopCoroutine(running);
-            }
-
-            running = StartCoroutine(WarmStage());
+            CollectSelectedMasters();
         }
 
-        private IEnumerator WarmStage()
+        private void Update()
         {
-            yield return null;
-            if (!ROROConfig.EnableSpawnPrewarm)
+            if (!ROROConfig.EnableSpawnPrewarm || cursor >= pending.Count)
             {
-                running = null;
-                yield break;
+                return;
             }
 
-            var prefabs = new List<GameObject>();
-            CollectStage(prefabs);
-            AddPrefab(prefabs, GenericPickupController.pickupPrefab);
-            AddPrefab(prefabs, GenericPickupController.pickupPrefabNoJuice);
-            AddPrefab(prefabs, PickupDropletController.pickupDropletPrefab);
-            if (prefabs.Count == 0)
+            if (NetworkManager.IsSceneLoadingAsynchronously)
             {
-                running = null;
-                yield break;
+                return;
             }
 
-            int warmed = 0;
-            RORO.GlobalLogger?.LogInfo($"Stage spawn prewarm started: {prefabs.Count} prefabs.");
-            for (int i = 0; i < prefabs.Count; i++)
+            CharacterMaster master = pending[cursor];
+            cursor++;
+            queued.Remove(master);
+            if (master)
+            {
+                done.Add(master);
+                master.PreloadAssets();
+                warmedSinceLog++;
+            }
+
+            if (cursor < pending.Count)
+            {
+                return;
+            }
+
+            pending.Clear();
+            cursor = 0;
+            if (warmedSinceLog > 0)
+            {
+                RORO.GlobalLogger?.LogInfo($"Stage spawn prewarm finished: {warmedSinceLog} masters.");
+                warmedSinceLog = 0;
+            }
+        }
+
+        private static void CollectSelectedMasters()
+        {
+            ClassicStageInfo? info = ClassicStageInfo.instance;
+            WeightedSelection<DirectorCard>? selection = info ? info.monsterSelection : null;
+            if (selection == null)
+            {
+                return;
+            }
+
+            int count = selection.Count;
+            for (int i = 0; i < count; i++)
+            {
+                DirectorCard? card = selection.choices[i].value;
+                SpawnCard? spawnCard = card != null ? card.GetSpawnCard() : null;
+                GameObject? prefab = spawnCard != null ? spawnCard.prefab : null;
+                if (prefab != null && prefab.TryGetComponent(out CharacterMaster? master) && master != null)
+                {
+                    Enqueue(master);
+                }
+            }
+        }
+
+        [HarmonyPatch(typeof(NetworkPreloadManager), "PreloadRequestedMastersCache")]
+        private static class SliceNetworkMasterPreload
+        {
+            private static HashSet<MasterCatalog.MasterIndex>? requestedMasters;
+            private static bool missingFieldLogged;
+
+            private static bool Prefix()
             {
                 if (!ROROConfig.EnableSpawnPrewarm)
                 {
-                    break;
+                    return true;
                 }
 
-                if (WarmPrefab(prefabs[i]))
+                HashSet<MasterCatalog.MasterIndex>? cache = RequestedMasters();
+                if (cache == null)
                 {
-                    warmed++;
+                    return true;
                 }
 
-                yield return null;
-            }
-
-            RORO.GlobalLogger?.LogInfo($"Stage spawn prewarm finished: {warmed} prefabs.");
-            running = null;
-        }
-
-        private static void CollectStage(List<GameObject> prefabs)
-        {
-            ClassicStageInfo info = ClassicStageInfo.instance;
-            if (!info)
-            {
-                return;
-            }
-
-            CollectPool(info.GetMonsterDccsPool, prefabs);
-            ClassicStageInfo.MonsterFamily[] families = info.possibleMonsterFamilies;
-            if (families == null)
-            {
-                return;
-            }
-
-            for (int i = 0; i < families.Length; i++)
-            {
-                CollectSelection(families[i].monsterFamilyCategories, prefabs);
-            }
-        }
-
-        private static void CollectPool(DccsPool pool, List<GameObject> prefabs)
-        {
-            if (pool == null || pool.poolCategories == null)
-            {
-                return;
-            }
-
-            DccsPool.Category[] categories = pool.poolCategories;
-            for (int i = 0; i < categories.Length; i++)
-            {
-                DccsPool.Category category = categories[i];
-                CollectEntries(category.alwaysIncluded, prefabs);
-                CollectEntries(category.includedIfNoConditionsMet, prefabs);
-                DccsPool.ConditionalPoolEntry[] conditional = category.includedIfConditionsMet;
-                if (conditional == null)
+                foreach (MasterCatalog.MasterIndex index in cache)
                 {
-                    continue;
+                    GameObject prefab = MasterCatalog.GetMasterPrefab(index);
+                    if (prefab && prefab.TryGetComponent(out CharacterMaster master))
+                    {
+                        Enqueue(master);
+                    }
                 }
 
-                for (int j = 0; j < conditional.Length; j++)
-                {
-                    CollectSelection(conditional[j].dccs, prefabs);
-                }
-            }
-        }
-
-        private static void CollectEntries(DccsPool.PoolEntry[] entries, List<GameObject> prefabs)
-        {
-            if (entries == null)
-            {
-                return;
-            }
-
-            for (int i = 0; i < entries.Length; i++)
-            {
-                CollectSelection(entries[i].dccs, prefabs);
-            }
-        }
-
-        private static void CollectSelection(DirectorCardCategorySelection selection, List<GameObject> prefabs)
-        {
-            if (selection == null || selection.categories == null)
-            {
-                return;
-            }
-
-            DirectorCardCategorySelection.Category[] categories = selection.categories;
-            for (int i = 0; i < categories.Length; i++)
-            {
-                DirectorCard[] cards = categories[i].cards;
-                if (cards == null)
-                {
-                    continue;
-                }
-
-                for (int j = 0; j < cards.Length; j++)
-                {
-                    AddCard(cards[j], prefabs);
-                }
-            }
-        }
-
-        private static void AddCard(DirectorCard card, List<GameObject> prefabs)
-        {
-            if (card == null)
-            {
-                return;
-            }
-
-            SpawnCard spawnCard = card.spawnCard;
-            if (!spawnCard || !spawnCard.prefab)
-            {
-                return;
-            }
-
-            AddPrefab(prefabs, spawnCard.prefab);
-            CharacterMaster master = spawnCard.prefab.GetComponent<CharacterMaster>();
-            if (!master)
-            {
-                return;
-            }
-
-            AddPrefab(prefabs, master.bodyPrefab);
-            AddPrefab(prefabs, master.originalBodyPrefab);
-        }
-
-        private static void AddPrefab(List<GameObject> prefabs, GameObject prefab)
-        {
-            if (!prefab || prefabs.Count >= PrefabCap)
-            {
-                return;
-            }
-
-            for (int i = 0; i < prefabs.Count; i++)
-            {
-                if (prefabs[i] == prefab)
-                {
-                    return;
-                }
-            }
-
-            prefabs.Add(prefab);
-        }
-
-        private static bool WarmPrefab(GameObject prefab)
-        {
-            if (!prefab)
-            {
+                cache.Clear();
                 return false;
             }
 
-            try
+            private static HashSet<MasterCatalog.MasterIndex>? RequestedMasters()
             {
-                GameObject instance = Object.Instantiate(prefab, WarmPosition, Quaternion.identity);
-                if (!instance.activeSelf)
+                if (requestedMasters != null)
                 {
-                    instance.SetActive(true);
+                    return requestedMasters;
                 }
 
-                instance.SetActive(false);
-                Object.Destroy(instance);
-                return true;
-            }
-            catch (System.Exception exception)
-            {
-                RORO.GlobalLogger?.LogWarning($"Stage spawn prewarm skipped {prefab.name}: {exception.Message}");
-                return false;
+                FieldInfo? field = AccessTools.Field(typeof(NetworkPreloadManager), "requestedMasterPreloadsCache");
+                if (field == null)
+                {
+                    if (!missingFieldLogged)
+                    {
+                        missingFieldLogged = true;
+                        RORO.GlobalLogger?.LogWarning("Stage spawn prewarm could not find the game's master preload list. The game will preload those masters in one frame.");
+                    }
+
+                    return null;
+                }
+
+                requestedMasters = (HashSet<MasterCatalog.MasterIndex>)field.GetValue(null);
+                return requestedMasters;
             }
         }
     }
