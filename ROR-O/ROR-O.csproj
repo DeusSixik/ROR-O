@@ -6,8 +6,15 @@
     <PropertyGroup>
         <DeployOnBuild Condition="'$(DeployOnBuild)' == ''">true</DeployOnBuild>
         <ModVersionFile>$(ProjectDir)..\version.properties</ModVersionFile>
-        <GameManagedDir>$(GameDir)\Risk of Rain 2_Data\Managed</GameManagedDir>
-        <BepInExCoreDir>$(ProfileDir)\BepInEx\core</BepInExCoreDir>
+        <ReferenceBundleDir>$(ProjectDir)..\otherMods</ReferenceBundleDir>
+        <ReferenceBundleAvailable Condition="Exists('$(ReferenceBundleDir)\LookingGlass.dll') and Exists('$(ReferenceBundleDir)\RoR2.dll') and Exists('$(ReferenceBundleDir)\Assembly-CSharp.dll') and Exists('$(ReferenceBundleDir)\BepInEx.dll') and Exists('$(ReferenceBundleDir)\0Harmony.dll')">true</ReferenceBundleAvailable>
+        <RoroPathsReady Condition="'$(RoroPathsReady)' == '' and '$(ReferenceBundleAvailable)' == 'true'">true</RoroPathsReady>
+        <GameManagedDir Condition="'$(ReferenceBundleAvailable)' != 'true'">$(GameDir)\Risk of Rain 2_Data\Managed</GameManagedDir>
+        <BepInExCoreDir Condition="'$(ReferenceBundleAvailable)' != 'true'">$(ProfileDir)\BepInEx\core</BepInExCoreDir>
+        <GameManagedDir Condition="'$(ReferenceBundleAvailable)' == 'true'">$(ReferenceBundleDir)</GameManagedDir>
+        <BepInExCoreDir Condition="'$(ReferenceBundleAvailable)' == 'true'">$(ReferenceBundleDir)</BepInExCoreDir>
+        <LookingGlassDll Condition="'$(ReferenceBundleAvailable)' == 'true'">$(ReferenceBundleDir)\LookingGlass.dll</LookingGlassDll>
+        <DeployPluginDir Condition="'$(ReferenceBundleAvailable)' == 'true'"></DeployPluginDir>
     </PropertyGroup>
 
     <Target Name="GenerateModVersion" BeforeTargets="BeforeBuild;CoreCompile" Condition="'$(RoroPathsReady)' == 'true' Or '$(DesignTimeBuild)' == 'true'">
@@ -77,7 +84,7 @@
         <Message Text="📦 Thunderstore ZIP created: $(ZipFileName)" Importance="high"/>
     </Target>
 
-    <Target Name="DeployToProfile" AfterTargets="Build" Condition="'$(DeployOnBuild)' == 'true' and '$(RoroPathsReady)' == 'true'">
+    <Target Name="DeployToProfile" AfterTargets="Build" Condition="'$(DeployOnBuild)' == 'true' and '$(RoroPathsReady)' == 'true' and '$(DeployPluginDir)' != ''">
         <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(DeployPluginDir)" />
         <Message Text="Deployed $(TargetFileName) to $(DeployPluginDir)" Importance="high"/>
     </Target>
@@ -95,7 +102,7 @@
         </EmbeddedResource>
     </ItemGroup>
 
-    <Target Name="CheckRoroPaths" BeforeTargets="ResolveAssemblyReferences" Condition="'$(GameDir)' == '' or '$(ProfileDir)' == ''">
+    <Target Name="CheckRoroPaths" BeforeTargets="ResolveAssemblyReferences" Condition="'$(ReferenceBundleAvailable)' != 'true' and ('$(GameDir)' == '' or '$(ProfileDir)' == '')">
         <Error Text="ROR-O has no game or profile path yet. Run dotnet build so it can search, or set them in ROR-O/roro.user.props (see roro.user.props.example)." />
     </Target>
 

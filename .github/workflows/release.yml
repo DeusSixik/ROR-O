@@ -1,7 +1,4 @@
-# The project references the local Risk of Rain 2 install and LookingGlass.dll.
-# A self-hosted Windows runner finds them on its own machine. Set RORO_GAME_DIR
-# and RORO_PROFILE_DIR in the runner environment when automatic discovery is not
-# suitable for that machine.
+# The project builds from the reference DLL bundle in otherMods/.
 
 name: Release
 
@@ -23,7 +20,7 @@ concurrency:
 jobs:
   release:
     name: Build and publish
-    runs-on: [self-hosted, Windows]
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -73,6 +70,23 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+
+      - name: Verify reference DLL bundle
+        if: steps.version.outputs.release == 'true'
+        shell: powershell
+        run: |
+          $required = @(
+            'LookingGlass.dll',
+            'RoR2.dll',
+            'Assembly-CSharp.dll',
+            'BepInEx.dll',
+            '0Harmony.dll'
+          )
+          $missing = @($required | Where-Object { -not (Test-Path (Join-Path 'otherMods' $_)) })
+          if ($missing.Count -gt 0) {
+            Write-Host "::error::Missing reference DLLs in otherMods/: $($missing -join ', ')"
+            exit 1
+          }
 
       - name: Build Release
         if: steps.version.outputs.release == 'true'
