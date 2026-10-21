@@ -144,6 +144,10 @@ Changing `version.properties` on `main` runs GitHub Actions on a GitHub-hosted W
 - **Solderyn** — runs the measurements
 - **Arisa** — playtesting
 
+### Art
+
+- **Samuel** — Aboba-art
+
 ## Contributing
 
 Issues and merge requests are welcome. People who help that way are listed here.
