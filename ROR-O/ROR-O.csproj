@@ -18,7 +18,6 @@
         <UnityManagedDir Condition="'$(ReferenceBundleAvailable)' == 'true'">$(ReferenceBundleDir)\unity</UnityManagedDir>
         <WwiseManagedDir Condition="'$(ReferenceBundleAvailable)' == 'true'">$(ReferenceBundleDir)\wwise</WwiseManagedDir>
         <LookingGlassDll Condition="'$(ReferenceBundleAvailable)' == 'true'">$(ReferenceBundleDir)\LookingGlass.dll</LookingGlassDll>
-        <DeployPluginDir Condition="'$(ReferenceBundleAvailable)' == 'true'"></DeployPluginDir>
     </PropertyGroup>
 
     <Target Name="GenerateModVersion" BeforeTargets="BeforeBuild;CoreCompile" Condition="'$(RoroPathsReady)' == 'true' Or '$(DesignTimeBuild)' == 'true'">
@@ -88,9 +87,21 @@
         <Message Text="📦 Thunderstore ZIP created: $(ZipFileName)" Importance="high"/>
     </Target>
 
-    <Target Name="DeployToProfile" AfterTargets="Build" Condition="'$(DeployOnBuild)' == 'true' and '$(RoroPathsReady)' == 'true' and '$(DeployPluginDir)' != ''">
-        <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(DeployPluginDir)" />
-        <Message Text="Deployed $(TargetFileName) to $(DeployPluginDir)" Importance="high"/>
+    <!-- otherMods is only the compile-time bundle. A local profile still receives the built plugin. -->
+    <Target Name="ResolveDeployPluginDir" Condition="'$(DeployPluginDir)' == '' and '$(ProfileDir)' != ''">
+        <ItemGroup>
+            <_ExistingRoroPlugin Include="$(ProfileDir)\BepInEx\plugins\**\ROR-O.dll" />
+        </ItemGroup>
+        <PropertyGroup Condition="'@(_ExistingRoroPlugin)' != ''">
+            <DeployPluginDir>$([System.IO.Path]::GetDirectoryName('%(_ExistingRoroPlugin.FullPath)'))</DeployPluginDir>
+        </PropertyGroup>
+    </Target>
+
+    <Target Name="DeployToProfile" AfterTargets="Build" Condition="'$(DeployOnBuild)' == 'true' and '$(RoroPathsReady)' == 'true' and ('$(DeployPluginDir)' != '' or '$(ProfileDir)' != '')">
+        <CallTarget Targets="ResolveDeployPluginDir" Condition="'$(DeployPluginDir)' == ''" />
+        <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(DeployPluginDir)" Condition="'$(DeployPluginDir)' != ''" />
+        <Message Text="Deployed $(TargetFileName) to $(DeployPluginDir)" Importance="high" Condition="'$(DeployPluginDir)' != ''" />
+        <Warning Text="Built $(TargetFileName) but did not copy it. No ROR-O.dll under $(ProfileDir)\BepInEx\plugins, and DeployPluginDir is empty." Condition="'$(DeployPluginDir)' == ''" />
     </Target>
 
     <PropertyGroup>
