@@ -19,6 +19,6 @@
     <MSBuild Projects="$(MSBuildProjectFullPath)"
              Targets="Build"
              RemoveProperties="GameDir;ProfileDir;LookingGlassDll;DeployPluginDir"
-             Properties="RoroPathsReady=true;Configuration=$(Configuration);DeployOnBuild=$(DeployOnBuild)" />
+             Properties="RoroPathsReady=true;Configuration=$(Configuration);DeployOnBuild=$(DeployOnBuild);ModVersion=$(ModVersion)" />
   </Target>
 </Project>
