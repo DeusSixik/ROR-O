@@ -118,7 +118,7 @@ A unique profile name is enough. Profiles outside AppData need `ProfileRoot`, or
 
 Debug copies `ROR-O.dll` into the profile. Release also writes `ROR-O/bin/Release/netstandard2.1/ROR_O-v` plus the version. The canonical version is `mod_version` in `version.properties`; the build uses it for the plugin metadata, assembly metadata, ZIP name, and manifest inside the ZIP. Use `-p:DeployOnBuild=false` to skip the copy.
 
-Put the compile-time DLLs from the game and BepInEx profile next to `otherMods/LookingGlass.dll` in `otherMods/`. The bundle must include at least `RoR2.dll`, `Assembly-CSharp.dll`, `BepInEx.dll`, and `0Harmony.dll`; the build then uses the whole folder and does not need a local game installation. Without the complete bundle, local builds keep using the existing Steam/profile path discovery.
+Put the compile-time DLLs in `otherMods/game/`, `otherMods/unity/`, `otherMods/wwise/`, and `otherMods/bepinex/`; keep `LookingGlass.dll` directly under `otherMods/`. The project maps references to these folders and builds without a local game installation when the bundle includes `RoR2.dll`, `Assembly-CSharp.dll`, `BepInEx.dll`, and `0Harmony.dll`. Without the complete bundle, local builds keep using the existing Steam/profile path discovery.
 
 Changing `version.properties` on `main` runs GitHub Actions on a GitHub-hosted Windows runner. If the matching `v` tag does not exist, the workflow verifies the DLL bundle, builds the mod, creates the tag, and publishes a GitHub Release of that version. A release can also be started manually from the Actions tab.
 

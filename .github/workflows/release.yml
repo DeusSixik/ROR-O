@@ -77,10 +77,12 @@ jobs:
         run: |
           $required = @(
             'LookingGlass.dll',
-            'RoR2.dll',
-            'Assembly-CSharp.dll',
-            'BepInEx.dll',
-            '0Harmony.dll'
+            'game\RoR2.dll',
+            'game\Assembly-CSharp.dll',
+            'bepinex\BepInEx.dll',
+            'bepinex\0Harmony.dll',
+            'wwise\Ak.Wwise.Api.WAAPI.dll',
+            'unity\UnityEngine.CoreModule.dll'
           )
           $missing = @($required | Where-Object { -not (Test-Path (Join-Path 'otherMods' $_)) })
           if ($missing.Count -gt 0) {
