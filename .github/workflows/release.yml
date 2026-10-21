@@ -56,7 +56,8 @@ jobs:
           }
 
           $release = $env:EVENT_NAME -eq 'workflow_dispatch' -or $old -ne $new
-          if (git rev-parse --verify --quiet "refs/tags/v$new") {
+          $existingTag = git tag --list "v$new"
+          if ($existingTag -contains "v$new") {
             Write-Host "Tag v$new already exists, skipping."
             $release = $false
           }
