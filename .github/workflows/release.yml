@@ -1,0 +1,61 @@
+# The project references the local Risk of Rain 2 install and LookingGlass.dll.
+# A self-hosted Windows runner finds them on its own machine. Any developer can
+# push the tag. If that machine has several profiles, set RORO_GAME_DIR and
+# RORO_PROFILE_DIR in the runner environment.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: [self-hosted, Windows]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Read version from the tag
+        id: version
+        shell: powershell
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') {
+            Write-Host "::error::Tag '$tag' must be v followed by a three-part version."
+            exit 1
+          }
+          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "version=$($Matches[1])`n")
+
+      - name: Build Release
+        shell: powershell
+        env:
+          MOD_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $buildArgs = @(
+            'build', 'ROR-O/ROR-O.csproj',
+            '-c', 'Release',
+            '-p:DeployOnBuild=false',
+            "-p:ModVersion=$env:MOD_VERSION"
+          )
+          if ($env:RORO_GAME_DIR) { $buildArgs += "-p:GameDir=$env:RORO_GAME_DIR" }
+          if ($env:RORO_PROFILE_DIR) { $buildArgs += "-p:ProfileDir=$env:RORO_PROFILE_DIR" }
+          & dotnet @buildArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ROR-O/bin/Release/netstandard2.1/ROR_O-v${{ steps.version.outputs.version }}.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true

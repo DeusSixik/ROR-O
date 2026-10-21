@@ -116,7 +116,9 @@ dotnet build ROR-O/ROR-O.csproj -c Debug -p:ProfileDir="D:\profiles\my-profile"
 
 A unique profile name is enough. Profiles outside AppData need `ProfileRoot`, or a copy of `ROR-O/roro.user.props.example`. Interactive choice: `powershell -File ROR-O/resolve-paths.ps1 -Ask`.
 
-Debug copies `ROR-O.dll` into the profile. Release also writes `ROR-O/bin/Release/netstandard2.1/ROR_O-v1.0.4.zip`. Use `-p:DeployOnBuild=false` to skip the copy.
+Debug copies `ROR-O.dll` into the profile. Release also writes `ROR-O/bin/Release/netstandard2.1/ROR_O-v` plus the version. Locally that version is `version_number` in `manifest.json`, or the value passed as `-p:ModVersion`. The same value is written into the plugin and into the manifest inside the zip. Use `-p:DeployOnBuild=false` to skip the copy.
+
+Pushing a tag named `v` plus a three-part version runs GitHub Actions on a self-hosted Windows runner and publishes a Release of that version. The runner finds the game and profile on its own machine. Any developer can push the tag.
 
 ## Known limitations
 
