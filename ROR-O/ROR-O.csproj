@@ -5,13 +5,14 @@
 
     <PropertyGroup>
         <DeployOnBuild Condition="'$(DeployOnBuild)' == ''">true</DeployOnBuild>
+        <ModVersionFile>$(ProjectDir)..\version.properties</ModVersionFile>
         <GameManagedDir>$(GameDir)\Risk of Rain 2_Data\Managed</GameManagedDir>
         <BepInExCoreDir>$(ProfileDir)\BepInEx\core</BepInExCoreDir>
     </PropertyGroup>
 
     <Target Name="GenerateModVersion" BeforeTargets="BeforeBuild;CoreCompile" Condition="'$(RoroPathsReady)' == 'true' Or '$(DesignTimeBuild)' == 'true'">
         <Exec Condition="'$(ModVersion)' == ''"
-              Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)version.ps1&quot; -Manifest &quot;$(ProjectDir)manifest.json&quot;"
+              Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)version.ps1&quot; -Manifest &quot;$(ProjectDir)manifest.json&quot; -VersionFile &quot;$(ModVersionFile)&quot;"
               ConsoleToMSBuild="true">
             <Output TaskParameter="ConsoleOutput" PropertyName="ModVersion" />
         </Exec>
@@ -54,7 +55,7 @@
         <MakeDir Directories="$(StagingDir)"/>
         <MakeDir Directories="$(PluginDir)"/>
 
-        <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)version.ps1&quot; -Manifest &quot;$(ProjectDir)manifest.json&quot; -Version &quot;$(ModVersion)&quot; -Destination &quot;$(StagingDir)manifest.json&quot;" />
+        <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)version.ps1&quot; -Manifest &quot;$(ProjectDir)manifest.json&quot; -VersionFile &quot;$(ModVersionFile)&quot; -Version &quot;$(ModVersion)&quot; -Destination &quot;$(StagingDir)manifest.json&quot;" />
 
         <ItemGroup>
             <RootFiles Include="$(ProjectDir)\..\README.md"/>

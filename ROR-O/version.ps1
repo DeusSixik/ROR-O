@@ -1,7 +1,8 @@
-# Reads manifest.json version_number and stamps it into a copy of the manifest.
+# Reads mod_version from version.properties and stamps it into a copy of the manifest.
 # Prints the version on stdout. Build-time only; do not ship this script in the mod zip.
 param(
     [Parameter(Mandatory = $true)][string]$Manifest,
+    [Parameter(Mandatory = $true)][string]$VersionFile,
     [string]$Version = "",
     [string]$Destination = ""
 )
@@ -10,11 +11,12 @@ $ErrorActionPreference = "Stop"
 
 $manifestText = [IO.File]::ReadAllText($Manifest)
 if (-not $Version) {
-    $match = [regex]::Match($manifestText, '"version_number"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"')
+    $propertiesText = [IO.File]::ReadAllText($VersionFile)
+    $match = [regex]::Match($propertiesText, '(?m)^\s*mod_version\s*=\s*([^\r\n#]+?)\s*$')
     if (-not $match.Success) {
-        throw "manifest.json has no three-part version_number."
+        throw "$VersionFile has no mod_version property."
     }
-    $Version = $match.Groups[1].Value
+    $Version = $match.Groups[1].Value.Trim()
 }
 
 if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {

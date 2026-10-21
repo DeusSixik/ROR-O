@@ -1,17 +1,24 @@
 # The project references the local Risk of Rain 2 install and LookingGlass.dll.
-# A self-hosted Windows runner finds them on its own machine. Any developer can
-# push the tag. If that machine has several profiles, set RORO_GAME_DIR and
-# RORO_PROFILE_DIR in the runner environment.
+# A self-hosted Windows runner finds them on its own machine. Set RORO_GAME_DIR
+# and RORO_PROFILE_DIR in the runner environment when automatic discovery is not
+# suitable for that machine.
 
 name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+    paths:
+      - version.properties
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -20,24 +27,55 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect version change
+        id: version
+        shell: powershell
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          function Get-Version([string]$Text) {
+            $match = [regex]::Match($Text, '(?m)^\s*mod_version\s*=\s*([^\r\n#]+?)\s*$')
+            if ($match.Success) { return $match.Groups[1].Value.Trim() }
+            return ''
+          }
+
+          $new = Get-Version ([IO.File]::ReadAllText('version.properties'))
+          if ($new -notmatch '^\d+\.\d+\.\d+$') {
+            Write-Host "::error::version.properties must contain mod_version with three numeric parts. Got '$new'."
+            exit 1
+          }
+
+          $old = ''
+          $before = $env:BEFORE_SHA
+          if ($env:EVENT_NAME -eq 'push' -and $before -and $before -notmatch '^0+$') {
+            $oldText = git show "${before}:version.properties" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              $old = Get-Version (($oldText -join "`n"))
+            }
+          }
+
+          $release = $env:EVENT_NAME -eq 'workflow_dispatch' -or $old -ne $new
+          if (git rev-parse --verify --quiet "refs/tags/v$new") {
+            Write-Host "Tag v$new already exists, skipping."
+            $release = $false
+          }
+
+          $releaseValue = if ($release) { 'true' } else { 'false' }
+          Write-Host "old=$old new=$new release=$releaseValue"
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "version=$new`nrelease=$releaseValue`n")
 
       - name: Setup .NET
+        if: steps.version.outputs.release == 'true'
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
 
-      - name: Read version from the tag
-        id: version
-        shell: powershell
-        run: |
-          $tag = $env:GITHUB_REF_NAME
-          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') {
-            Write-Host "::error::Tag '$tag' must be v followed by a three-part version."
-            exit 1
-          }
-          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "version=$($Matches[1])`n")
-
       - name: Build Release
+        if: steps.version.outputs.release == 'true'
         shell: powershell
         env:
           MOD_VERSION: ${{ steps.version.outputs.version }}
@@ -54,8 +92,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Publish GitHub Release
+        if: steps.version.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ github.event.repository.name }} ${{ steps.version.outputs.version }}
           files: ROR-O/bin/Release/netstandard2.1/ROR_O-v${{ steps.version.outputs.version }}.zip
           generate_release_notes: true
           fail_on_unmatched_files: true
