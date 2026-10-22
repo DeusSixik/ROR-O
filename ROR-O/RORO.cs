@@ -285,6 +285,8 @@ namespace ROR_O
                 true,
                 "Preloads the animator, avatar, and skins of monsters this stage can spawn, one monster per frame. Uses the game's own master preload and also includes bosses from that list. Takes effect on the next stage.");
 
+            EffectRuntime.Bind(config);
+
             RiskOfOptionsIntegration.Hold(new RiskOfOptionsCatalog
             {
                 DamageNumbersProfile = damageNumbersProfile,
@@ -317,6 +319,18 @@ namespace ROR_O
                 GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
                 GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
                 EnableSpawnPrewarm = enableSpawnPrewarm,
+                EffectsProfile = EffectRuntime.Profile,
+                EnableEffectWarmup = EffectRuntime.WarmEffects,
+                KeepEffectPools = EffectRuntime.KeepPoolsEntry,
+                WarmInstances = EffectRuntime.WarmInstancesEntry,
+                WarmPrefabLimit = EffectRuntime.WarmPrefabLimitEntry,
+                EffectLoadsPerFrame = EffectRuntime.LoadsPerFrameEntry,
+                EffectWarmsPerFrame = EffectRuntime.WarmsPerFrameEntry,
+                CullSecondaryEffects = EffectRuntime.CullSecondary,
+                EffectCullDistance = EffectRuntime.CullDistanceEntry,
+                CullEffectsOffScreen = EffectRuntime.CullOffScreenEntry,
+                EffectCullInterval = EffectRuntime.CullIntervalEntry,
+                ShowEffectStatus = EffectRuntime.ShowStatusEntry,
             });
         }
     }
@@ -340,6 +354,7 @@ namespace ROR_O
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
             patches.OptimizeSphereSearch.Install(harmony);
+            EffectPools.Install(harmony);
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
             patches.SkipUnchangedBuffTimerPatch.Register();
             HitchWatchStartup.Register(this);
@@ -347,6 +362,7 @@ namespace ROR_O
             patches.RegisterSteamP2PPatch.Register(this);
             RiskOfOptionsIntegration.Publish();
             gameObject.AddComponent<SpawnPrewarm>();
+            gameObject.AddComponent<EffectRuntime>();
         }
     }
 }
