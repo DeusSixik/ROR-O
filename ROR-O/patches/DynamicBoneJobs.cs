@@ -1634,8 +1634,13 @@ namespace ROR_O.patches
 
         private static void Postfix(long __state)
         {
-            DynamicBoneJobs.Stats.LateUpdateTicks += System.Diagnostics.Stopwatch.GetTimestamp() - __state;
+            long elapsed = System.Diagnostics.Stopwatch.GetTimestamp() - __state;
+            DynamicBoneJobs.Stats.LateUpdateTicks += elapsed;
             DynamicBoneJobs.Stats.LateUpdateCalls++;
+            if (HitchProbes.Armed)
+            {
+                HitchProbes.Add(HitchProbes.Id.DynBone, elapsed);
+            }
         }
     }
 
