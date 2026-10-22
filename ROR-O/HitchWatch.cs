@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using HarmonyLib;
 using BepInEx;
 using BepInEx.Bootstrap;
 using BepInEx.Configuration;
@@ -223,6 +225,8 @@ namespace ROR_O
         {
             Attach(Metric.Gc, ProfilerCategory.Memory, "GC.Collect");
             InstallPhases();
+            InstallProbes();
+            HitchProbes.Armed = true;
             ResetPhases();
             writeFailed = false;
             filePath = CreateFile();
@@ -244,6 +248,8 @@ namespace ROR_O
 
         private void StopWatch()
         {
+            HitchProbes.Armed = false;
+            RemoveProbes();
             RemovePhases();
             FlushPendingHitch(force: true);
             if (summary.Frames > 0)
@@ -358,6 +364,7 @@ namespace ROR_O
                 hitchRank = rank;
                 hitchReason = reason;
                 hitchFrame = frame;
+                HitchProbes.Hold();
             }
         }
 
@@ -396,6 +403,10 @@ namespace ROR_O
                 ScriptsMs = publishedScripts,
                 LateMs = publishedLate,
                 FixedMs = publishedFixed,
+                PhysicsMs = HitchProbes.PublishedPhaseMs(HitchProbes.Phase.Physics),
+                CanvasMs = HitchProbes.PublishedPhaseMs(HitchProbes.Phase.Canvas),
+                AnimMs = HitchProbes.PublishedPhaseMs(HitchProbes.Phase.Anim),
+                ParticlesMs = HitchProbes.PublishedPhaseMs(HitchProbes.Phase.Particles),
                 GcMs = ReadMs(Metric.Gc),
                 WaitMs = wait,
                 GcBytes = ReadManagedBytes()
@@ -703,6 +714,16 @@ namespace ROR_O
             line.Append(reason);
             Comma();
             line.Append(top);
+            Comma();
+            if (kind == "hitch" || kind == "stall")
+            {
+                HitchProbes.AppendHeld(line);
+            }
+            else
+            {
+                HitchProbes.AppendWindow(line, frames);
+            }
+
             try
             {
                 writer.WriteLine(line.ToString());
@@ -739,7 +760,9 @@ namespace ROR_O
         private void LogRecorders()
         {
             RORO.GlobalLogger?.LogInfo(
-                "Hitch watch phases: update, late update, fixed update, render, wait. GC.Collect recorder="
+                "Hitch watch phases: update, late update, fixed update, render, wait. "
+                + "detail column: n.phys/n.part/n.anim/n.canvas/n.skin are microseconds of those native player-loop steps; "
+                + "a method is microseconds/calls per frame. GC.Collect recorder="
                 + (recorderOn[(int)Metric.Gc] ? "on" : "missing"));
             if (Chainloader.PluginInfos.ContainsKey("MonoProfiler"))
             {
@@ -758,7 +781,7 @@ namespace ROR_O
                 string name = "HitchWatch_" + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss", CultureInfo.InvariantCulture) + ".csv";
                 string path = System.IO.Path.Combine(directory, name);
                 writer = new StreamWriter(path, false, new UTF8Encoding(false));
-                writer.WriteLine("kind,t_s,players,bodies,host,stage,run_s,frames,frame_ms,max_ms,cpu_ms,render_ms,scripts_ms,late_ms,fixed_ms,physics_ms,canvas_ms,anim_ms,particles_ms,gc_ms,wait_ms,gc_bytes,median_ms,p95_ms,p99_ms,p999_ms,render_p95_ms,render_p99_ms,render_p999_ms,target_ms,hitches,reason,top");
+                writer.WriteLine("kind,t_s,players,bodies,host,stage,run_s,frames,frame_ms,max_ms,cpu_ms,render_ms,scripts_ms,late_ms,fixed_ms,physics_ms,canvas_ms,anim_ms,particles_ms,gc_ms,wait_ms,gc_bytes,median_ms,p95_ms,p99_ms,p999_ms,render_p95_ms,render_p99_ms,render_p999_ms,target_ms,hitches,reason,top,detail");
                 writer.Flush();
                 return path;
             }
@@ -1054,9 +1077,95 @@ namespace ROR_O
                 }
             }
 
+            InstallNativeBrackets(stages);
             root.subSystemList = stages;
             PlayerLoop.SetPlayerLoop(root);
             phasesInstalled = true;
+        }
+
+        private static void InstallNativeBrackets(PlayerLoopSystem[] stages)
+        {
+            bool physics = false;
+            bool particlesBegin = false;
+            bool particlesEnd = false;
+            bool animBegin = false;
+            bool animEnd = false;
+            bool canvas = false;
+            bool skin = false;
+            for (int i = 0; i < stages.Length; i++)
+            {
+                physics |= Bracket(ref stages[i], typeof(FixedUpdate.PhysicsFixedUpdate), typeof(HitchPhysicsBegin), OnPhysicsBegin, typeof(HitchPhysicsEnd), OnPhysicsEnd);
+                particlesBegin |= Bracket(ref stages[i], typeof(PreLateUpdate.ParticleSystemBeginUpdateAll), typeof(HitchParticlesBegin), OnParticlesBegin, typeof(HitchParticlesEnd), OnParticlesEnd);
+                particlesEnd |= Bracket(ref stages[i], typeof(PostLateUpdate.ParticleSystemEndUpdateAll), typeof(HitchParticlesSyncBegin), OnParticlesBegin, typeof(HitchParticlesSyncEnd), OnParticlesEnd);
+                animBegin |= Bracket(ref stages[i], typeof(PreLateUpdate.DirectorUpdateAnimationBegin), typeof(HitchAnimBegin), OnAnimBegin, typeof(HitchAnimEnd), OnAnimEnd);
+                animEnd |= Bracket(ref stages[i], typeof(PreLateUpdate.DirectorUpdateAnimationEnd), typeof(HitchAnimSyncBegin), OnAnimBegin, typeof(HitchAnimSyncEnd), OnAnimEnd);
+                canvas |= Bracket(ref stages[i], typeof(PostLateUpdate.PlayerUpdateCanvases), typeof(HitchCanvasBegin), OnCanvasBegin, typeof(HitchCanvasEnd), OnCanvasEnd);
+                skin |= Bracket(ref stages[i], typeof(PostLateUpdate.UpdateAllSkinnedMeshes), typeof(HitchSkinBegin), OnSkinBegin, typeof(HitchSkinEnd), OnSkinEnd);
+            }
+
+            RORO.GlobalLogger?.LogInfo(
+                "Hitch watch native steps: physics " + (physics ? "on" : "missing")
+                + ", particles " + (particlesBegin && particlesEnd ? "on" : "missing")
+                + ", animation " + (animBegin && animEnd ? "on" : "missing")
+                + ", canvas " + (canvas ? "on" : "missing")
+                + ", skinned meshes " + (skin ? "on" : "missing")
+                + ".");
+        }
+
+        private static bool Bracket(
+            ref PlayerLoopSystem node,
+            Type child,
+            Type beginType,
+            PlayerLoopSystem.UpdateFunction begin,
+            Type endType,
+            PlayerLoopSystem.UpdateFunction end)
+        {
+            PlayerLoopSystem[] list = node.subSystemList;
+            if (list == null || list.Length == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < list.Length; i++)
+            {
+                if (list[i].type != child)
+                {
+                    continue;
+                }
+
+                var systems = new List<PlayerLoopSystem>(list.Length + 2);
+                for (int j = 0; j < list.Length; j++)
+                {
+                    if (j == i)
+                    {
+                        systems.Add(new PlayerLoopSystem { type = beginType, updateDelegate = begin });
+                    }
+
+                    systems.Add(list[j]);
+                    if (j == i)
+                    {
+                        systems.Add(new PlayerLoopSystem { type = endType, updateDelegate = end });
+                    }
+                }
+
+                node.subSystemList = systems.ToArray();
+                return true;
+            }
+
+            for (int i = 0; i < list.Length; i++)
+            {
+                PlayerLoopSystem childNode = list[i];
+                if (!Bracket(ref childNode, child, beginType, begin, endType, end))
+                {
+                    continue;
+                }
+
+                list[i] = childNode;
+                node.subSystemList = list;
+                return true;
+            }
+
+            return false;
         }
 
         private static void RemovePhases()
@@ -1070,20 +1179,7 @@ namespace ROR_O
             PlayerLoopSystem[] stages = root.subSystemList;
             for (int i = 0; i < stages.Length; i++)
             {
-                if (stages[i].subSystemList == null)
-                {
-                    continue;
-                }
-
-                var systems = new List<PlayerLoopSystem>(stages[i].subSystemList);
-                systems.RemoveAll(system => system.type == typeof(HitchFrameBegin)
-                                            || system.type == typeof(HitchUpdateStart)
-                                            || system.type == typeof(HitchUpdateEnd)
-                                            || system.type == typeof(HitchLateEnd)
-                                            || system.type == typeof(HitchFixedStart)
-                                            || system.type == typeof(HitchFixedEnd)
-                                            || system.type == typeof(HitchPostLateEnd));
-                stages[i].subSystemList = systems.ToArray();
+                stages[i] = StripMarkers(stages[i]);
             }
 
             root.subSystemList = stages;
@@ -1117,8 +1213,146 @@ namespace ROR_O
             return stage;
         }
 
+        private static bool IsHitchMarker(Type type)
+        {
+            return type == typeof(HitchFrameBegin)
+                || type == typeof(HitchUpdateStart)
+                || type == typeof(HitchUpdateEnd)
+                || type == typeof(HitchLateEnd)
+                || type == typeof(HitchFixedStart)
+                || type == typeof(HitchFixedEnd)
+                || type == typeof(HitchPostLateEnd)
+                || type == typeof(HitchPhysicsBegin)
+                || type == typeof(HitchPhysicsEnd)
+                || type == typeof(HitchParticlesBegin)
+                || type == typeof(HitchParticlesEnd)
+                || type == typeof(HitchParticlesSyncBegin)
+                || type == typeof(HitchParticlesSyncEnd)
+                || type == typeof(HitchAnimBegin)
+                || type == typeof(HitchAnimEnd)
+                || type == typeof(HitchAnimSyncBegin)
+                || type == typeof(HitchAnimSyncEnd)
+                || type == typeof(HitchCanvasBegin)
+                || type == typeof(HitchCanvasEnd)
+                || type == typeof(HitchSkinBegin)
+                || type == typeof(HitchSkinEnd);
+        }
+
+        private static PlayerLoopSystem StripMarkers(PlayerLoopSystem node)
+        {
+            if (node.subSystemList == null)
+            {
+                return node;
+            }
+
+            var systems = new List<PlayerLoopSystem>(node.subSystemList.Length);
+            for (int i = 0; i < node.subSystemList.Length; i++)
+            {
+                if (IsHitchMarker(node.subSystemList[i].type))
+                {
+                    continue;
+                }
+
+                systems.Add(StripMarkers(node.subSystemList[i]));
+            }
+
+            node.subSystemList = systems.ToArray();
+            return node;
+        }
+
+        private static Harmony? probeHarmony;
+
+        private static void InstallProbes()
+        {
+            probeHarmony = new Harmony("net.sixik.plugin.roro.hitchprobes");
+            HitchProbeHooks.Install(probeHarmony);
+        }
+
+        private static void RemoveProbes()
+        {
+            if (probeHarmony == null)
+            {
+                return;
+            }
+
+            HitchProbeHooks.Uninstall(probeHarmony);
+            probeHarmony = null;
+        }
+
+        private static long physicsStamp;
+        private static long particleStamp;
+        private static long animStamp;
+        private static long canvasStamp;
+        private static long skinStamp;
+
+        private static void OnPhysicsBegin()
+        {
+            physicsStamp = Stopwatch.GetTimestamp();
+        }
+
+        private static void OnPhysicsEnd()
+        {
+            HitchProbes.AddPhase(HitchProbes.Phase.Physics, Stopwatch.GetTimestamp() - physicsStamp);
+        }
+
+        private static void OnParticlesBegin()
+        {
+            particleStamp = Stopwatch.GetTimestamp();
+        }
+
+        private static void OnParticlesEnd()
+        {
+            HitchProbes.AddPhase(HitchProbes.Phase.Particles, Stopwatch.GetTimestamp() - particleStamp);
+        }
+
+        private static void OnAnimBegin()
+        {
+            animStamp = Stopwatch.GetTimestamp();
+        }
+
+        private static void OnAnimEnd()
+        {
+            HitchProbes.AddPhase(HitchProbes.Phase.Anim, Stopwatch.GetTimestamp() - animStamp);
+        }
+
+        private static void OnCanvasBegin()
+        {
+            canvasStamp = Stopwatch.GetTimestamp();
+        }
+
+        private static void OnCanvasEnd()
+        {
+            HitchProbes.AddPhase(HitchProbes.Phase.Canvas, Stopwatch.GetTimestamp() - canvasStamp);
+        }
+
+        private static void OnSkinBegin()
+        {
+            skinStamp = Stopwatch.GetTimestamp();
+        }
+
+        private static void OnSkinEnd()
+        {
+            HitchProbes.AddPhase(HitchProbes.Phase.Skin, Stopwatch.GetTimestamp() - skinStamp);
+        }
+
+        private struct HitchPhysicsBegin { }
+        private struct HitchPhysicsEnd { }
+        private struct HitchParticlesBegin { }
+        private struct HitchParticlesEnd { }
+        private struct HitchParticlesSyncBegin { }
+        private struct HitchParticlesSyncEnd { }
+        private struct HitchAnimBegin { }
+        private struct HitchAnimEnd { }
+        private struct HitchAnimSyncBegin { }
+        private struct HitchAnimSyncEnd { }
+        private struct HitchCanvasBegin { }
+        private struct HitchCanvasEnd { }
+        private struct HitchSkinBegin { }
+        private struct HitchSkinEnd { }
+
         private static void OnFrameBegin()
         {
+            HitchProbes.PublishFrame();
             double now = Time.realtimeSinceStartupAsDouble;
             if (frameClosed && stampUpdateEnd >= stampUpdateStart && stampLateEnd >= stampUpdateEnd && stampPostLateEnd >= stampLateEnd)
             {

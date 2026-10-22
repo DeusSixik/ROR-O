@@ -93,8 +93,14 @@ namespace ROR_O
             queued.Remove(master);
             if (master)
             {
+                long started = HitchProbes.Armed ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
                 done.Add(master);
                 master.PreloadAssets();
+                if (started != 0L)
+                {
+                    HitchProbes.Add(HitchProbes.Id.Prewarm, System.Diagnostics.Stopwatch.GetTimestamp() - started);
+                }
+
                 warmedSinceLog++;
             }
 
