@@ -4,7 +4,6 @@ using System.Reflection;
 using BepInEx.Bootstrap;
 using BepInEx.Configuration;
 using UnityEngine;
-using UnityEngine.Events;
 
 namespace ROR_O
 {
@@ -42,19 +41,21 @@ namespace ROR_O
         public ConfigEntry<int>? GenericIkRecentlyVisibleGraceFrames { get; set; }
         public ConfigEntry<bool>? EnableThreadedSteamP2P { get; set; }
         public ConfigEntry<bool>? EnableNetworkDebug { get; set; }
+        public ConfigEntry<SettingsProfiles.Profile>? SpawnsProfile { get; set; }
         public ConfigEntry<bool>? EnableSpawnPrewarm { get; set; }
+        public ConfigEntry<int>? MastersPerFrame { get; set; }
+        public ConfigEntry<bool>? WarmStageBosses { get; set; }
+        public ConfigEntry<bool>? SkipLongSpawnFrames { get; set; }
+        public ConfigEntry<bool>? ShowMobStatus { get; set; }
+        public ConfigEntry<bool>? LogMobStatus { get; set; }
         public ConfigEntry<SettingsProfiles.Profile>? EffectsProfile { get; set; }
         public ConfigEntry<bool>? EnableEffectWarmup { get; set; }
         public ConfigEntry<bool>? KeepEffectPools { get; set; }
-        public ConfigEntry<int>? WarmInstances { get; set; }
-        public ConfigEntry<int>? WarmPrefabLimit { get; set; }
+        public ConfigEntry<int>? WarmPeakCopies { get; set; }
         public ConfigEntry<int>? EffectLoadsPerFrame { get; set; }
         public ConfigEntry<int>? EffectWarmsPerFrame { get; set; }
-        public ConfigEntry<bool>? CullSecondaryEffects { get; set; }
-        public ConfigEntry<float>? EffectCullDistance { get; set; }
-        public ConfigEntry<bool>? CullEffectsOffScreen { get; set; }
-        public ConfigEntry<int>? EffectCullInterval { get; set; }
         public ConfigEntry<bool>? ShowEffectStatus { get; set; }
+        public ConfigEntry<bool>? LogEffectStatus { get; set; }
         public ConfigEntry<bool>? EnableHitchWatch { get; set; }
         public ConfigEntry<int>? HitchWatchTargetFps { get; set; }
         public ConfigEntry<bool>? EnableMonoProfiler { get; set; }
@@ -116,9 +117,9 @@ namespace ROR_O
             {
                 var menu = new Menu(assembly);
 #if DEBUG
-                menu.SetDescription("Performance options for effects, damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately. The Mono Profiler switch applies on the next launch.");
+                menu.SetDescription("Performance options for effects, stage spawns, damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately. The Mono Profiler switch applies on the next launch.");
 #else
-                menu.SetDescription("Performance options for effects, damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately.");
+                menu.SetDescription("Performance options for effects, stage spawns, damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately.");
 #endif
                 menu.SetIcon(LoadIcon());
                 AddEntries(menu, catalog);
@@ -169,23 +170,25 @@ namespace ROR_O
             menu.IntSlider(catalog.GenericIkRecentlyVisibleGraceFrames, 0, 120, genericIkDisabled);
             menu.CheckBox(catalog.EnableThreadedSteamP2P);
             menu.CheckBox(catalog.EnableNetworkDebug);
+
+            menu.Choice(catalog.SpawnsProfile);
+            Func<bool> spawnPrewarmOff = () => catalog.EnableSpawnPrewarm?.Value != true;
             menu.CheckBox(catalog.EnableSpawnPrewarm);
+            menu.IntSlider(catalog.MastersPerFrame, 1, 4, spawnPrewarmOff);
+            menu.CheckBox(catalog.WarmStageBosses, spawnPrewarmOff);
+            menu.CheckBox(catalog.SkipLongSpawnFrames, spawnPrewarmOff);
+            menu.CheckBox(catalog.ShowMobStatus);
+            menu.CheckBox(catalog.LogMobStatus);
 
             menu.Choice(catalog.EffectsProfile);
             Func<bool> effectWarmupOff = () => catalog.EnableEffectWarmup?.Value != true;
-            Func<bool> effectCullOff = () => catalog.CullSecondaryEffects?.Value != true;
             menu.CheckBox(catalog.EnableEffectWarmup);
             menu.CheckBox(catalog.KeepEffectPools);
-            menu.IntSlider(catalog.WarmInstances, 0, 4, effectWarmupOff);
-            menu.IntSlider(catalog.WarmPrefabLimit, 0, 2000, effectWarmupOff);
+            menu.IntSlider(catalog.WarmPeakCopies, 0, 8, effectWarmupOff);
             menu.IntSlider(catalog.EffectLoadsPerFrame, 1, 8, effectWarmupOff);
             menu.IntSlider(catalog.EffectWarmsPerFrame, 1, 2, effectWarmupOff);
-            menu.CheckBox(catalog.CullSecondaryEffects);
-            menu.StepSlider(catalog.EffectCullDistance, 10f, 200f, 5f, "0", effectCullOff);
-            menu.CheckBox(catalog.CullEffectsOffScreen, effectCullOff);
-            menu.IntSlider(catalog.EffectCullInterval, 1, 20, effectCullOff);
             menu.CheckBox(catalog.ShowEffectStatus);
-            menu.Button("Effects", "Log Effect Status", "Writes the current effect catalog, pool, and cull counts to the BepInEx log.", "Log", EffectRuntime.LogStatus);
+            menu.CheckBox(catalog.LogEffectStatus);
 
             menu.CheckBox(catalog.EnableHitchWatch);
             menu.IntSlider(catalog.HitchWatchTargetFps, 30, 240, () => catalog.EnableHitchWatch?.Value != true);
@@ -296,14 +299,6 @@ namespace ROR_O
                 Add("RiskOfOptions.Options.IntSliderOption", entry, config);
             }
 
-            public void Button(string category, string name, string description, string buttonText, UnityAction onPressed)
-            {
-                Type optionType = RequireType("RiskOfOptions.Options.GenericButtonOption");
-                object option = Activator.CreateInstance(optionType, name, category, description, buttonText, onPressed)
-                    ?? throw new MissingMethodException(optionType.FullName);
-                addOption.Invoke(null, new[] { option });
-            }
-
             public void StepSlider(ConfigEntry<float>? entry, float min, float max, float increment, string format, Func<bool>? disabledWhen = null)
             {
                 if (entry == null)
@@ -315,8 +310,12 @@ namespace ROR_O
                 Set(config, "min", min);
                 Set(config, "max", max);
                 Set(config, "increment", increment);
-                Set(config, "formatString", format);
-                config.GetType().GetProperty("FormatString", FieldFlags)?.SetValue(config, format);
+                // RiskOfOptions runs string.Format(culture, FormatString, value), so the format must
+                // carry the placeholder. Callers pass a bare "0.00", which formats to the literal
+                // text "0" whatever the slider does.
+                string wrapped = format.Contains("{0") ? format : "{0:" + format + "}";
+                Set(config, "formatString", wrapped);
+                config.GetType().GetProperty("FormatString", FieldFlags)?.SetValue(config, wrapped);
                 Add("RiskOfOptions.Options.StepSliderOption", entry, config);
             }
 

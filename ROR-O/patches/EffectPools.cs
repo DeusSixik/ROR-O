@@ -51,13 +51,10 @@ namespace ROR_O
             }
             else
             {
-                harmony.Patch(spawn, transpiler: new HarmonyMethod(typeof(EffectPools), nameof(ReuseSpawnCopy)));
-            }
-
-            MethodInfo? disable = AccessTools.Method(typeof(VFXAttributes), "OnDisable");
-            if (disable != null)
-            {
-                harmony.Patch(disable, postfix: new HarmonyMethod(typeof(EffectPools), nameof(OnEffectDisabled)));
+                harmony.Patch(
+                    spawn,
+                    transpiler: new HarmonyMethod(typeof(EffectPools), nameof(ReuseSpawnCopy)),
+                    postfix: new HarmonyMethod(typeof(EffectPools), nameof(NoteSpawned)));
             }
         }
 
@@ -223,9 +220,9 @@ namespace ROR_O
             return !EffectRuntime.KeepPools;
         }
 
-        private static void OnEffectDisabled(VFXAttributes __instance)
+        private static void NoteSpawned(EffectIndex effectIndex)
         {
-            EffectRuntime.NoteEffectDisabled(__instance);
+            EffectRuntime.NoteEffectSpawned(effectIndex);
         }
 
         // KillAllPools runs on every scene unload and then calls GC.Collect. The copies are already destroyed.

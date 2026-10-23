@@ -72,9 +72,6 @@ namespace ROR_O
         public static bool EnableGenericIkInvisibleThrottling => enableGenericIkInvisibleThrottling?.Value ?? true;
         public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 4;
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 4;
-        public static bool EnableSpawnPrewarm => enableSpawnPrewarm?.Value ?? true;
-
-        private static ConfigEntry<bool>? enableSpawnPrewarm;
 
         private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? dynamicBonesProfile;
@@ -279,12 +276,7 @@ namespace ROR_O
             SettingsProfiles.Add(genericIkRecentlyVisibleGraceFrames, 20, 4, 1);
             SettingsProfiles.End();
 
-            enableSpawnPrewarm = config.Bind(
-                "Spawns",
-                "Prewarm Stage Spawns",
-                true,
-                "Preloads the animator, avatar, and skins of monsters this stage can spawn, one monster per frame. Uses the game's own master preload and also includes bosses from that list. Takes effect on the next stage.");
-
+            SpawnPrewarm.Bind(config);
             EffectRuntime.Bind(config);
 
             RiskOfOptionsIntegration.Hold(new RiskOfOptionsCatalog
@@ -318,19 +310,21 @@ namespace ROR_O
                 EnableGenericIkInvisibleThrottling = enableGenericIkInvisibleThrottling,
                 GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
                 GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
-                EnableSpawnPrewarm = enableSpawnPrewarm,
+                SpawnsProfile = SpawnPrewarm.Profile,
+                EnableSpawnPrewarm = SpawnPrewarm.EnableEntry,
+                MastersPerFrame = SpawnPrewarm.MastersPerFrameEntry,
+                WarmStageBosses = SpawnPrewarm.WarmBossesEntry,
+                SkipLongSpawnFrames = SpawnPrewarm.SkipLongFramesEntry,
+                ShowMobStatus = SpawnPrewarm.ShowStatusEntry,
+                LogMobStatus = SpawnPrewarm.LogStatusEntry,
                 EffectsProfile = EffectRuntime.Profile,
                 EnableEffectWarmup = EffectRuntime.WarmEffects,
                 KeepEffectPools = EffectRuntime.KeepPoolsEntry,
-                WarmInstances = EffectRuntime.WarmInstancesEntry,
-                WarmPrefabLimit = EffectRuntime.WarmPrefabLimitEntry,
+                WarmPeakCopies = EffectRuntime.WarmPeakCopiesEntry,
                 EffectLoadsPerFrame = EffectRuntime.LoadsPerFrameEntry,
                 EffectWarmsPerFrame = EffectRuntime.WarmsPerFrameEntry,
-                CullSecondaryEffects = EffectRuntime.CullSecondary,
-                EffectCullDistance = EffectRuntime.CullDistanceEntry,
-                CullEffectsOffScreen = EffectRuntime.CullOffScreenEntry,
-                EffectCullInterval = EffectRuntime.CullIntervalEntry,
                 ShowEffectStatus = EffectRuntime.ShowStatusEntry,
+                LogEffectStatus = EffectRuntime.LogStatusEntry,
             });
         }
     }
