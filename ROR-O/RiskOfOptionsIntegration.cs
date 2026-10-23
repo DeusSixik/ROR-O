@@ -41,7 +41,23 @@ namespace ROR_O
         public ConfigEntry<int>? GenericIkRecentlyVisibleGraceFrames { get; set; }
         public ConfigEntry<bool>? EnableThreadedSteamP2P { get; set; }
         public ConfigEntry<bool>? EnableNetworkDebug { get; set; }
+        public ConfigEntry<SettingsProfiles.Profile>? SpawnsProfile { get; set; }
         public ConfigEntry<bool>? EnableSpawnPrewarm { get; set; }
+        public ConfigEntry<int>? MastersPerFrame { get; set; }
+        public ConfigEntry<bool>? WarmStageBosses { get; set; }
+        public ConfigEntry<bool>? SkipLongSpawnFrames { get; set; }
+        public ConfigEntry<bool>? ShowMobStatus { get; set; }
+        public ConfigEntry<bool>? LogMobStatus { get; set; }
+        public ConfigEntry<bool>? LateSpawnImmunity { get; set; }
+        public ConfigEntry<SettingsProfiles.Profile>? EffectsProfile { get; set; }
+        public ConfigEntry<bool>? EnableEffectWarmup { get; set; }
+        public ConfigEntry<bool>? KeepEffectPools { get; set; }
+        public ConfigEntry<int>? WarmPeakCopies { get; set; }
+        public ConfigEntry<bool>? WarmAllEffectCopies { get; set; }
+        public ConfigEntry<int>? EffectLoadsPerFrame { get; set; }
+        public ConfigEntry<int>? EffectWarmsPerFrame { get; set; }
+        public ConfigEntry<bool>? ShowEffectStatus { get; set; }
+        public ConfigEntry<bool>? LogEffectStatus { get; set; }
         public ConfigEntry<bool>? EnableHitchWatch { get; set; }
         public ConfigEntry<int>? HitchWatchTargetFps { get; set; }
         public ConfigEntry<bool>? EnableMonoProfiler { get; set; }
@@ -103,9 +119,9 @@ namespace ROR_O
             {
                 var menu = new Menu(assembly);
 #if DEBUG
-                menu.SetDescription("Performance options for damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately. The Mono Profiler switch applies on the next launch.");
+                menu.SetDescription("Performance options for effects, stage spawns, damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately. The Mono Profiler switch applies on the next launch.");
 #else
-                menu.SetDescription("Performance options for damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately.");
+                menu.SetDescription("Performance options for effects, stage spawns, damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately.");
 #endif
                 menu.SetIcon(LoadIcon());
                 AddEntries(menu, catalog);
@@ -156,7 +172,28 @@ namespace ROR_O
             menu.IntSlider(catalog.GenericIkRecentlyVisibleGraceFrames, 0, 120, genericIkDisabled);
             menu.CheckBox(catalog.EnableThreadedSteamP2P);
             menu.CheckBox(catalog.EnableNetworkDebug);
+
+            menu.Choice(catalog.SpawnsProfile);
+            Func<bool> spawnPrewarmOff = () => catalog.EnableSpawnPrewarm?.Value != true;
             menu.CheckBox(catalog.EnableSpawnPrewarm);
+            menu.IntSlider(catalog.MastersPerFrame, 1, 4, spawnPrewarmOff);
+            menu.CheckBox(catalog.WarmStageBosses, spawnPrewarmOff);
+            menu.CheckBox(catalog.SkipLongSpawnFrames, spawnPrewarmOff);
+            menu.CheckBox(catalog.ShowMobStatus);
+            menu.CheckBox(catalog.LogMobStatus);
+            menu.CheckBox(catalog.LateSpawnImmunity, null, "<color=#FFDD44>Late Spawn Immunity</color>");
+
+            menu.Choice(catalog.EffectsProfile);
+            Func<bool> effectWarmupOff = () => catalog.EnableEffectWarmup?.Value != true;
+            menu.CheckBox(catalog.EnableEffectWarmup);
+            menu.CheckBox(catalog.KeepEffectPools);
+            menu.IntSlider(catalog.WarmPeakCopies, 0, 8, effectWarmupOff);
+            menu.CheckBox(catalog.WarmAllEffectCopies, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm All Effect Copies");
+            menu.IntSlider(catalog.EffectLoadsPerFrame, 1, 8, effectWarmupOff);
+            menu.IntSlider(catalog.EffectWarmsPerFrame, 1, 2, effectWarmupOff);
+            menu.CheckBox(catalog.ShowEffectStatus);
+            menu.CheckBox(catalog.LogEffectStatus);
+
             menu.CheckBox(catalog.EnableHitchWatch);
             menu.IntSlider(catalog.HitchWatchTargetFps, 30, 240, () => catalog.EnableHitchWatch?.Value != true);
 #if DEBUG
@@ -242,14 +279,21 @@ namespace ROR_O
                 Add("RiskOfOptions.Options.ChoiceOption", entry, config);
             }
 
-            public void CheckBox(ConfigEntry<bool>? entry, Func<bool>? disabledWhen = null)
+            public void CheckBox(ConfigEntry<bool>? entry, Func<bool>? disabledWhen = null, string? displayName = null)
             {
                 if (entry == null)
                 {
                     return;
                 }
 
-                object? config = disabledWhen == null ? null : CreateConfig("RiskOfOptions.OptionConfigs.CheckBoxConfig", entry, disabledWhen);
+                object? config = disabledWhen == null && displayName == null
+                    ? null
+                    : CreateConfig("RiskOfOptions.OptionConfigs.CheckBoxConfig", entry, disabledWhen);
+                if (config != null && displayName != null)
+                {
+                    Set(config, "name", displayName);
+                }
+
                 Add("RiskOfOptions.Options.CheckBoxOption", entry, config);
             }
 
@@ -277,8 +321,12 @@ namespace ROR_O
                 Set(config, "min", min);
                 Set(config, "max", max);
                 Set(config, "increment", increment);
-                Set(config, "formatString", format);
-                config.GetType().GetProperty("FormatString", FieldFlags)?.SetValue(config, format);
+                // RiskOfOptions runs string.Format(culture, FormatString, value), so the format must
+                // carry the placeholder. Callers pass a bare "0.00", which formats to the literal
+                // text "0" whatever the slider does.
+                string wrapped = format.Contains("{0") ? format : "{0:" + format + "}";
+                Set(config, "formatString", wrapped);
+                config.GetType().GetProperty("FormatString", FieldFlags)?.SetValue(config, wrapped);
                 Add("RiskOfOptions.Options.StepSliderOption", entry, config);
             }
 

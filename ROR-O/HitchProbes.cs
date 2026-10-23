@@ -16,6 +16,11 @@ namespace ROR_O
             Anim,
             Canvas,
             Skin,
+            Finish,
+            Renderers,
+            Present,
+            Scene,
+            UiCam,
             Count
         }
 
@@ -42,7 +47,12 @@ namespace ROR_O
             "n.part",
             "n.anim",
             "n.canvas",
-            "n.skin"
+            "n.skin",
+            "n.finish",
+            "n.rndrs",
+            "n.present",
+            "n.scene",
+            "n.uicam"
         };
 
         private static readonly string[] MethodNames =
