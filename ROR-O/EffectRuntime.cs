@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Text;
 using BepInEx.Configuration;
 using RoR2;
@@ -19,7 +20,12 @@ namespace ROR_O
     internal sealed class EffectRuntime : MonoBehaviour
     {
         private const float CalmFrameSeconds = 0.012f;
-        private const float ForcedWarmSeconds = 2f;
+        // A warm is an Instantiate plus EffectManagerHelper.Initialize on the main thread. Never start
+        // one on a frame that is already a hitch, and after the opening window combat gets at most
+        // one warm per interval instead of one on every calm frame.
+        private const float HitchFrameSeconds = 0.033f;
+        private const float BusyWarmIntervalSeconds = 0.5f;
+        private const float ExpensiveWarmMs = 3f;
         private static readonly Vector3 Park = new Vector3(0f, -5000f, 0f);
         private static readonly Vector3 CullBounds = new Vector3(12f, 12f, 12f);
         private static readonly Plane[] Frustum = new Plane[6];
@@ -36,8 +42,11 @@ namespace ROR_O
         private static ConfigEntry<int>? cullInterval;
         private static ConfigEntry<bool>? showStatus;
 
-        private static readonly Dictionary<VFXAttributes, EffectCullGate> gates = new Dictionary<VFXAttributes, EffectCullGate>();
+        private static readonly Dictionary<VFXAttributes, EffectCullState> gates = new Dictionary<VFXAttributes, EffectCullState>();
         private static readonly StringBuilder statusBuilder = new StringBuilder(384);
+        // Reused across warms: checking out several helpers at once is the only way to make a pool
+        // grow past the copies it already holds. Returning each one immediately re-pops the same copy.
+        private static readonly List<EffectManagerHelper> heldHelpers = new List<EffectManagerHelper>(4);
 
         private static AsyncOperationHandle<GameObject>[] handles = System.Array.Empty<AsyncOperationHandle<GameObject>>();
         private static AssetReferenceT<GameObject>?[] addresses = System.Array.Empty<AssetReferenceT<GameObject>?>();
@@ -52,9 +61,13 @@ namespace ROR_O
         private static int culledEffects;
         private static int frame;
         private static float lastWarmTime;
+        private static float warmNotBefore;
+        private static bool frustumReady;
         private static float sceneReadyTime;
         private static Camera? gameplayCamera;
         private static bool reportedReady;
+        private static int readyTarget = int.MinValue;
+        private static int readyLimit = int.MinValue;
         private static bool cullWasEnabled;
         private static string statusText = "Effect status is not ready yet.";
         private static GUIStyle? statusStyle;
@@ -167,11 +180,20 @@ namespace ROR_O
 
         internal static void NoteEffectDisabled(VFXAttributes attributes)
         {
-            if (!attributes || !gates.TryGetValue(attributes, out EffectCullGate? gate) || !gate || !gate.secondaryStopped)
+            if (!attributes || !gates.TryGetValue(attributes, out EffectCullState? gate) || gate == null)
             {
                 return;
             }
 
+            gates.Remove(attributes);
+            if (!gate.secondaryStopped)
+            {
+                return;
+            }
+
+            // Pooling disables the effect while lights are still off. Reset restarts particles
+            // on the next spawn and does not touch these lights, so restore them here.
+            RestoreLights(attributes.optionalLights, gate);
             gate.secondaryStopped = false;
             if (culledEffects > 0)
             {
@@ -205,6 +227,9 @@ namespace ROR_O
             warmedPrefabs = 0;
             instancesBuilt = 0;
             reportedReady = false;
+            readyTarget = int.MinValue;
+            readyLimit = int.MinValue;
+            warmNotBefore = 0f;
             sceneReadyTime = Time.unscaledTime;
             System.Array.Clear(warmed, 0, warmed.Length);
             System.Array.Clear(settled, 0, settled.Length);
@@ -242,6 +267,15 @@ namespace ROR_O
                 return;
             }
 
+            // Starting an Addressables load and instantiating a copy are both main-thread work.
+            // A frame that already ran long gets neither; the old overdue rule did the opposite and
+            // forced a warm onto exactly those frames once two seconds had passed.
+            float frameSeconds = Time.unscaledDeltaTime;
+            if (frameSeconds > HitchFrameSeconds || Time.unscaledTime < warmNotBefore)
+            {
+                return;
+            }
+
             int loads = Clamp(loadsPerFrame?.Value ?? 4, 1, 8);
             int started = 0;
             while (pinCursor < count && started < loads)
@@ -260,18 +294,37 @@ namespace ROR_O
 
             bool busy = CharacterBody.readOnlyInstancesList.Count > 1;
             bool opening = Time.unscaledTime - sceneReadyTime < 15f;
-            bool calm = Time.unscaledDeltaTime <= CalmFrameSeconds;
-            bool overdue = Time.unscaledTime - lastWarmTime >= ForcedWarmSeconds;
+            bool calm = frameSeconds <= CalmFrameSeconds;
+            bool throttled = Time.unscaledTime - lastWarmTime < BusyWarmIntervalSeconds;
             if (!opening && busy)
             {
-                if (!calm || !overdue)
+                if (throttled)
                 {
                     return;
                 }
             }
-            else if (!calm && !overdue)
+            else if (!calm && throttled)
             {
                 return;
+            }
+
+            int targetNow = Clamp(warmInstances?.Value ?? 1, 0, 4);
+            int limitNow = Mathf.Max(0, warmPrefabLimit?.Value ?? 0);
+            if (reportedReady)
+            {
+                if (readyTarget == targetNow && readyLimit == limitNow)
+                {
+                    return;
+                }
+
+                if (!AnyPending(targetNow, limitNow))
+                {
+                    readyTarget = targetNow;
+                    readyLimit = limitNow;
+                    return;
+                }
+
+                reportedReady = false;
             }
 
             int budget = Clamp(warmsPerFrame?.Value ?? 1, 1, 2);
@@ -292,6 +345,14 @@ namespace ROR_O
 
                 warmCursor++;
                 checks++;
+            }
+
+            if (!reportedReady && pinCursor >= count && !AnyPending(targetNow, limitNow))
+            {
+                reportedReady = true;
+                readyTarget = targetNow;
+                readyLimit = limitNow;
+                RORO.GlobalLogger?.LogInfo($"Effect warmup finished: {warmedPrefabs} prefabs, {instancesBuilt} copies built, catalog {handles.Length}.");
             }
         }
 
@@ -336,10 +397,9 @@ namespace ROR_O
             float resume = distance * 0.75f;
             float resumeSqr = resume * resume;
             bool offScreen = cullOffScreen?.Value == true;
-            if (offScreen)
-            {
-                GeometryUtility.CalculateFrustumPlanes(camera!, Frustum);
-            }
+            // Frustum planes are built on first use inside Consider. A pass where every live
+            // effect is already past the cull distance never needs them.
+            frustumReady = false;
 
             Vector3 cameraPosition = camera!.transform.position;
             ReadOnlyCollection<VFXAttributes> live = VFXAttributes.readonlyVFXList;
@@ -398,6 +458,8 @@ namespace ROR_O
             warmedPrefabs = 0;
             instancesBuilt = 0;
             reportedReady = false;
+            readyTarget = int.MinValue;
+            readyLimit = int.MinValue;
             return count;
         }
 
@@ -469,7 +531,18 @@ namespace ROR_O
             if (!prefab)
             {
                 AsyncOperationHandle<GameObject> handle = handles[index];
-                if (!handle.IsValid() || !handle.IsDone)
+                if (!handle.IsValid())
+                {
+                    // The warm cursor can lap the pin cursor. An invalid handle before Pin ran is not a failure.
+                    if (index < pinCursor)
+                    {
+                        settled[index] = true;
+                    }
+
+                    return false;
+                }
+
+                if (!handle.IsDone)
                 {
                     return false;
                 }
@@ -497,8 +570,31 @@ namespace ROR_O
             }
 
             string prefabName = prefab!.name;
-            EffectManagerHelper? helper = null;
+
+            // A combat spawn may already have left enough idle copies in this pool. Checking one
+            // out and returning it again builds nothing, so do not spend the checkout or count it.
+            int idleBefore = EffectPools.PoolIdleCount(prefab);
+            if (idleBefore >= target)
+            {
+                if (warmed[index] == 0)
+                {
+                    warmedPrefabs++;
+                }
+
+                warmed[index] = (byte)target;
+                return false;
+            }
+
+            // GetObject pops an idle copy when one exists, so a checkout returned at once reuses
+            // the same copy every time. Holding every checkout until the target is reached is
+            // what forces the pool to instantiate distinct copies for Warm Instances above one.
+            int need = target - idleBefore;
+            int totalBefore = EffectPools.PoolTotalCount(prefab);
+            int checkoutBefore = EffectPools.CheckoutCount(prefab);
             bool wasActive = prefab.activeSelf;
+            bool checkoutStarted = false;
+            heldHelpers.Clear();
+            long warmStart = Stopwatch.GetTimestamp();
             try
             {
                 if (wasActive)
@@ -508,11 +604,29 @@ namespace ROR_O
                     prefab.SetActive(false);
                 }
 
-                helper = EffectManager.GetPooledEffect(prefab, Park, Quaternion.identity);
+                checkoutStarted = true;
+                for (int i = 0; i < need; i++)
+                {
+                    EffectManagerHelper? helper = EffectManager.GetPooledEffect(prefab, Park, Quaternion.identity);
+                    if (!helper)
+                    {
+                        settled[index] = true;
+                        ReturnHeld(prefabName);
+                        return false;
+                    }
+
+                    heldHelpers.Add(helper);
+                }
             }
             catch (System.Exception exception)
             {
                 settled[index] = true;
+                ReturnHeld(prefabName);
+                if (checkoutStarted)
+                {
+                    EffectPools.DiscardCheckoutGrowth(prefab, checkoutBefore);
+                }
+
                 RORO.GlobalLogger?.LogWarning($"Effect warmup skipped {prefabName}: {exception.Message}");
                 return false;
             }
@@ -524,21 +638,15 @@ namespace ROR_O
                 }
             }
 
-            if (!helper)
+            int builtCopies = EffectPools.PoolTotalCount(prefab) - totalBefore;
+            if (builtCopies < 0)
             {
-                settled[index] = true;
-                return false;
+                builtCopies = 0;
             }
 
-            try
+            if (!ReturnHeld(prefabName))
             {
-                helper.ReturnToPool();
-            }
-            catch (System.Exception exception)
-            {
-                helper.gameObject.SetActive(false);
                 settled[index] = true;
-                RORO.GlobalLogger?.LogWarning($"Effect warmup could not park {prefabName}: {exception.Message}");
                 return false;
             }
 
@@ -547,15 +655,46 @@ namespace ROR_O
                 warmedPrefabs++;
             }
 
-            warmed[index]++;
-            instancesBuilt++;
-            if (!reportedReady && pinCursor >= handles.Length && !AnyPending(target, limit))
+            warmed[index] = (byte)target;
+            instancesBuilt += builtCopies;
+
+            // One instantiate cannot be split, so a costly prefab earns a cooldown instead of
+            // letting the next frame pay for another one right away.
+            float warmMs = (float)((Stopwatch.GetTimestamp() - warmStart) * 1000d / Stopwatch.Frequency);
+            if (warmMs > ExpensiveWarmMs)
             {
-                reportedReady = true;
-                RORO.GlobalLogger?.LogInfo($"Effect warmup finished: {warmedPrefabs} prefabs, {instancesBuilt} inactive copies, catalog {handles.Length}.");
+                float cooldown = warmMs * 0.008f;
+                warmNotBefore = Time.unscaledTime + (cooldown > 1f ? 1f : cooldown);
             }
 
             return true;
+        }
+
+        private static bool ReturnHeld(string prefabName)
+        {
+            bool parked = true;
+            for (int i = 0; i < heldHelpers.Count; i++)
+            {
+                EffectManagerHelper helper = heldHelpers[i];
+                try
+                {
+                    helper.ReturnToPool();
+                }
+                catch (System.Exception exception)
+                {
+                    if (helper)
+                    {
+                        helper.gameObject.SetActive(false);
+                    }
+
+                    EffectPools.Discard(helper);
+                    parked = false;
+                    RORO.GlobalLogger?.LogWarning($"Effect warmup could not park {prefabName}: {exception.Message}");
+                }
+            }
+
+            heldHelpers.Clear();
+            return parked;
         }
 
         private static bool AnyPending(int target, int limit)
@@ -589,14 +728,9 @@ namespace ROR_O
                 return;
             }
 
-            if (!gates.TryGetValue(attributes, out EffectCullGate? gate) || !gate)
+            if (!gates.TryGetValue(attributes, out EffectCullState? gate) || gate == null)
             {
-                gate = attributes.GetComponent<EffectCullGate>();
-                if (!gate)
-                {
-                    gate = attributes.gameObject.AddComponent<EffectCullGate>();
-                }
-
+                gate = new EffectCullState();
                 gates[attributes] = gate;
             }
 
@@ -604,9 +738,24 @@ namespace ROR_O
             float distanceSqr = delta.sqrMagnitude;
             bool tooFar = distanceSqr > (gate.secondaryStopped ? resumeSqr : stopSqr);
             bool hidden = false;
-            if (offScreen)
+            if (!tooFar && offScreen)
             {
-                hidden = !GeometryUtility.TestPlanesAABB(Frustum, new Bounds(attributes.transform.position, CullBounds));
+                // Distance alone already stops this effect, so the six-plane test is only
+                // paid for effects close enough to stay visible on distance grounds.
+                if (!frustumReady)
+                {
+                    Camera? camera = gameplayCamera;
+                    if (camera)
+                    {
+                        GeometryUtility.CalculateFrustumPlanes(camera, Frustum);
+                        frustumReady = true;
+                    }
+                }
+
+                if (frustumReady)
+                {
+                    hidden = !GeometryUtility.TestPlanesAABB(Frustum, new Bounds(attributes.transform.position, CullBounds));
+                }
             }
 
             bool stop = tooFar || hidden;
@@ -631,7 +780,7 @@ namespace ROR_O
             }
         }
 
-        private static void StopSecondary(ParticleSystem[]? systems, Light[]? lights, EffectCullGate gate)
+        private static void StopSecondary(ParticleSystem[]? systems, Light[]? lights, EffectCullState gate)
         {
             if (systems != null)
             {
@@ -668,7 +817,7 @@ namespace ROR_O
             }
         }
 
-        private static void PlaySecondary(ParticleSystem[]? systems, Light[]? lights, EffectCullGate gate)
+        private static void PlaySecondary(ParticleSystem[]? systems, Light[]? lights, EffectCullState gate)
         {
             if (systems != null)
             {
@@ -682,6 +831,11 @@ namespace ROR_O
                 }
             }
 
+            RestoreLights(lights, gate);
+        }
+
+        private static void RestoreLights(Light[]? lights, EffectCullState gate)
+        {
             if (lights == null || gate.lightWasEnabled == null)
             {
                 return;
@@ -700,11 +854,11 @@ namespace ROR_O
 
         private static void ResumeAll()
         {
-            foreach (KeyValuePair<VFXAttributes, EffectCullGate> pair in gates)
+            foreach (KeyValuePair<VFXAttributes, EffectCullState> pair in gates)
             {
-                EffectCullGate? gate = pair.Value;
+                EffectCullState? gate = pair.Value;
                 VFXAttributes? attributes = pair.Key;
-                if (!gate || !gate.secondaryStopped || !attributes)
+                if (gate == null || !gate.secondaryStopped || !attributes)
                 {
                     continue;
                 }
@@ -734,13 +888,15 @@ namespace ROR_O
             }
 
             EffectPools.CountPools(out int pools, out int idle, out int inUse);
+            int target = Clamp(warmInstances?.Value ?? 1, 0, 4);
+            int live = VFXAttributes.readonlyVFXList.Count;
 
             statusBuilder.Clear();
             statusBuilder.Append("Effects ").Append(handles.Length);
             statusBuilder.Append("\nPinned ").Append(pinned).Append("  loaded ").Append(loaded);
-            statusBuilder.Append("\nWarmed prefabs ").Append(warmedPrefabs).Append("  inactive copies ").Append(instancesBuilt);
+            statusBuilder.Append("\nWarmed prefabs ").Append(warmedPrefabs).Append("  copies built ").Append(instancesBuilt).Append("  target ").Append(target);
             statusBuilder.Append("\nPools ").Append(pools).Append("  idle ").Append(idle).Append("  in use ").Append(inUse);
-            statusBuilder.Append("\nSecondary culled ").Append(culledEffects);
+            statusBuilder.Append("\nLive ").Append(live).Append("  secondary culled ").Append(culledEffects);
             statusText = statusBuilder.ToString();
         }
 
@@ -755,7 +911,7 @@ namespace ROR_O
         }
     }
 
-    internal sealed class EffectCullGate : MonoBehaviour
+    internal sealed class EffectCullState
     {
         internal bool secondaryStopped;
         internal bool[]? lightWasEnabled;

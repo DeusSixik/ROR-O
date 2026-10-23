@@ -183,6 +183,10 @@
             <HintPath>$(GameManagedDir)\mscorlib.dll</HintPath>
             <Private>false</Private>
         </Reference>
+        <Reference Include="Grumpy">
+            <HintPath>$(GameManagedDir)\Grumpy.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
         <Reference Include="RoR2">
             <HintPath>$(GameManagedDir)\RoR2.dll</HintPath>
             <Publicize>true</Publicize>

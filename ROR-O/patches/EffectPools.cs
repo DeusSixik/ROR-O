@@ -17,8 +17,6 @@ namespace ROR_O
         private static readonly FieldInfo? MapField = AccessTools.Field(typeof(EffectManager), "_EffectPrefabMap");
         private static readonly MethodInfo? CollectMethod = AccessTools.Method(typeof(System.GC), nameof(System.GC.Collect), System.Type.EmptyTypes);
         private static readonly MethodInfo? CloneMethod = AccessTools.Method(typeof(EffectData), nameof(EffectData.Clone));
-        private static readonly MethodInfo? PoolCountMethod = AccessTools.Method(typeof(EffectPool), "PoolCount");
-        private static readonly MethodInfo? InUseCountMethod = AccessTools.Method(typeof(EffectPool), "InUseCount");
         private static readonly object[] LoadArgs = new object[2];
 
         private static MethodInfo? loadAsset;
@@ -79,7 +77,7 @@ namespace ROR_O
             idle = 0;
             inUse = 0;
             Dictionary<GameObject, EffectPool>? map = PoolMap();
-            if (map == null || PoolCountMethod == null || InUseCountMethod == null)
+            if (map == null)
             {
                 return;
             }
@@ -87,9 +85,88 @@ namespace ROR_O
             pools = map.Count;
             foreach (EffectPool pool in map.Values)
             {
-                idle += (int)PoolCountMethod.Invoke(pool, null);
-                inUse += (int)InUseCountMethod.Invoke(pool, null);
+                idle += pool.PoolCount();
+                inUse += pool.InUseCount();
             }
+        }
+
+        internal static int CheckoutCount(GameObject prefab)
+        {
+            Dictionary<GameObject, EffectPool>? map = PoolMap();
+            if (map == null || !map.TryGetValue(prefab, out EffectPool? pool))
+            {
+                return 0;
+            }
+
+            return pool.InUseCount();
+        }
+
+        internal static int PoolIdleCount(GameObject prefab)
+        {
+            Dictionary<GameObject, EffectPool>? map = PoolMap();
+            if (map == null || !map.TryGetValue(prefab, out EffectPool? pool))
+            {
+                return 0;
+            }
+
+            return pool.PoolCount();
+        }
+
+        // Idle plus in-use is the number of copies the pool has actually instantiated.
+        // GetObject only creates when that total grows; popping an idle copy does not.
+        internal static int PoolTotalCount(GameObject prefab)
+        {
+            Dictionary<GameObject, EffectPool>? map = PoolMap();
+            if (map == null || !map.TryGetValue(prefab, out EffectPool? pool))
+            {
+                return 0;
+            }
+
+            return pool.PoolCount() + pool.InUseCount();
+        }
+
+        // GetPooledEffect adds the copy to the in-use list and only then runs Initialize.
+        // A throw there leaves that copy checked out. It is the tail of the list.
+        internal static void DiscardCheckoutGrowth(GameObject prefab, int checkoutCountBefore)
+        {
+            Dictionary<GameObject, EffectPool>? map = PoolMap();
+            if (map == null || !map.TryGetValue(prefab, out EffectPool? pool))
+            {
+                return;
+            }
+
+            int guard = pool.InUseCount();
+            while (pool.InUseCount() > checkoutCountBefore && guard-- > 0)
+            {
+                List<EffectManagerHelper>? inUse = pool.InUse;
+                if (inUse == null || inUse.Count == 0)
+                {
+                    return;
+                }
+
+                EffectManagerHelper leaked = inUse[inUse.Count - 1];
+                pool.RemoveObject(leaked);
+                if (leaked)
+                {
+                    UnityEngine.Object.Destroy(leaked.gameObject);
+                }
+            }
+        }
+
+        internal static void Discard(EffectManagerHelper helper)
+        {
+            if (!helper)
+            {
+                return;
+            }
+
+            EffectPool? pool = helper.OwningPool;
+            if (pool != null)
+            {
+                pool.RemoveObject(helper);
+            }
+
+            UnityEngine.Object.Destroy(helper.gameObject);
         }
 
         // EffectDef's own preload is released on the next scene change. OnRunEnd stays until the run ends,
