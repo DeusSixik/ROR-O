@@ -7,6 +7,7 @@ using HarmonyLib;
 using RoR2;
 using RoR2.Networking;
 using UnityEngine;
+using UnityEngine.AddressableAssets;
 using UnityEngine.Networking;
 using UnityEngine.SceneManagement;
 
@@ -24,6 +25,12 @@ namespace ROR_O
         private static readonly List<CharacterMaster> pending = new List<CharacterMaster>();
         private static readonly HashSet<CharacterMaster> queued = new HashSet<CharacterMaster>();
         private static readonly HashSet<CharacterMaster> done = new HashSet<CharacterMaster>();
+        // Masters the server sent for the incoming stage while this peer was still under
+        // FadeToBlack, plus the subset already preloaded in that window. Scene load would
+        // normally reset the queue and throw that work away; OnSceneLoaded keeps both.
+        private static readonly HashSet<CharacterMaster> incomingMasters = new HashSet<CharacterMaster>();
+        private static readonly HashSet<CharacterMaster> incomingWarmed = new HashSet<CharacterMaster>();
+        private static readonly HashSet<string> eliteDisplayPins = new HashSet<string>();
         private static readonly StringBuilder statusBuilder = new StringBuilder(256);
 
         private static ConfigEntry<bool>? enable;
@@ -32,7 +39,10 @@ namespace ROR_O
         private static ConfigEntry<bool>? skipLongFrames;
         private static ConfigEntry<bool>? showStatus;
         private static ConfigEntry<bool>? logStatus;
+        private static ConfigEntry<bool>? lateSpawnImmunity;
         private static float nextLogTime;
+
+        private const float LateSpawnImmunitySeconds = 5f;
 
         private static int cursor;
         private static int warmedSinceLog;
@@ -43,6 +53,7 @@ namespace ROR_O
         private static int networkListed;
         private static int networkQueued;
         private static int warmed;
+        private static int eliteDisplays;
         private static int missing;
         private static int longSkips;
         private static bool sceneHold;
@@ -60,6 +71,7 @@ namespace ROR_O
         internal static ConfigEntry<bool>? SkipLongFramesEntry => skipLongFrames;
         internal static ConfigEntry<bool>? ShowStatusEntry => showStatus;
         internal static ConfigEntry<bool>? LogStatusEntry => logStatus;
+        internal static ConfigEntry<bool>? LateSpawnImmunityEntry => lateSpawnImmunity;
 
         private static bool Enabled => enable?.Value ?? true;
 
@@ -103,6 +115,12 @@ namespace ROR_O
                 false,
                 "Writes the spawn-prewarm counts to the BepInEx log once a second while this is on.");
 
+            lateSpawnImmunity = config.Bind(
+                section,
+                "Late Spawn Immunity",
+                false,
+                "<color=#FFDD44>[Gameplay tweak]</color> When a player other than the host spawns on a stage, the host grants them the Immune buff for 5 seconds. A stage entry otherwise has no spawn protection. Revives already get 3 seconds from the game, and this does not replace that. The joining client cannot apply it to itself.");
+
             Profile = SettingsProfiles.Begin(config, section);
             SettingsProfiles.Add(enable, true, true, true);
             SettingsProfiles.Add(mastersPerFrame, 1, 1, 2);
@@ -110,6 +128,7 @@ namespace ROR_O
             SettingsProfiles.Add(skipLongFrames, true, false, false);
             SettingsProfiles.Add(showStatus, false, false, false);
             SettingsProfiles.Add(logStatus, false, false, false);
+            SettingsProfiles.Add(lateSpawnImmunity, false, false, false);
             SettingsProfiles.End();
         }
 
@@ -150,9 +169,44 @@ namespace ROR_O
                 return;
             }
 
+            // Elite display pins are held to run end. Outside a run they may already be
+            // released, so the next run must be allowed to request them again.
+            if (!Run.instance)
+            {
+                eliteDisplayPins.Clear();
+            }
+
             // Fires before Start on the new scene, so the stage list and the network preload
             // message are still ahead of this. Drop the previous stage and preload the next one.
+            // Work already done in the loading window is the exception: masters sent for this
+            // stage and preloaded under FadeToBlack stay done, and the unprocessed rest of
+            // that list stays queued instead of being thrown away with the old stage.
+            if (incomingMasters.Count == 0)
+            {
+                ResetQueue();
+                return;
+            }
+
+            var keepPending = new List<CharacterMaster>();
+            foreach (CharacterMaster master in incomingMasters)
+            {
+                if (!incomingWarmed.Contains(master))
+                {
+                    keepPending.Add(master);
+                }
+            }
+
+            var keepDone = new List<CharacterMaster>(incomingWarmed);
             ResetQueue();
+            foreach (CharacterMaster master in keepDone)
+            {
+                done.Add(master);
+            }
+
+            foreach (CharacterMaster master in keepPending)
+            {
+                Enqueue(master);
+            }
         }
 
         private static void ResetQueue()
@@ -160,6 +214,8 @@ namespace ROR_O
             pending.Clear();
             queued.Clear();
             done.Clear();
+            incomingMasters.Clear();
+            incomingWarmed.Clear();
             cursor = 0;
             warmedSinceLog = 0;
             stageListed = 0;
@@ -169,6 +225,7 @@ namespace ROR_O
             networkListed = 0;
             networkQueued = 0;
             warmed = 0;
+            eliteDisplays = 0;
             missing = 0;
             longSkips = 0;
             sceneHold = false;
@@ -197,24 +254,41 @@ namespace ROR_O
                 return;
             }
 
-            if (NetworkManager.IsSceneLoadingAsynchronously)
-            {
-                sceneHold = true;
-                return;
-            }
-
-            sceneHold = false;
-            if (skipLongFrames?.Value == true && Time.unscaledDeltaTime > HitchFrameSeconds)
+            // In the loading window a preload is only an Addressables load start, which
+            // survives scene activation, so the queue keeps moving under FadeToBlack with
+            // the shared loading budget instead of the in-game per-frame count. Masters
+            // that arrive for the incoming stage are marked in OnSceneLoaded's keep sets,
+            // so activation does not throw this work away.
+            bool loading = LoadingPhase.IsLoading;
+            sceneHold = loading;
+            if (!loading && skipLongFrames?.Value == true && Time.unscaledDeltaTime > HitchFrameSeconds)
             {
                 longSkips++;
                 return;
             }
 
             int budget = Clamp(mastersPerFrame?.Value ?? 1, 1, 4);
-            while (cursor < pending.Count && budget-- > 0)
+            long frameStart = Stopwatch.GetTimestamp();
+            int processed = 0;
+            while (cursor < pending.Count)
             {
+                if (loading)
+                {
+                    if (LoadingPhase.BudgetExpired(frameStart, processed))
+                    {
+                        break;
+                    }
+                }
+                else if (processed >= budget)
+                {
+                    break;
+                }
+
                 WarmOne();
+                processed++;
             }
+
+            PublishProgress();
 
             if (cursor < pending.Count)
             {
@@ -270,8 +344,12 @@ namespace ROR_O
                 statusStyle.normal.textColor = Color.white;
             }
 
-            // The effect status occupies the top-left. Sit under it when both overlays are on.
-            float top = EffectRuntime.ShowStatusEntry?.Value == true ? 120f : 16f;
+            float top = 16f + LoadingProgressView.BlockHeight;
+            if (EffectRuntime.ShowStatusEntry?.Value == true)
+            {
+                top += 110f;
+            }
+
             GUI.Label(new Rect(16f, top, 760f, 160f), statusText, statusStyle);
         }
 
@@ -288,7 +366,13 @@ namespace ROR_O
 
             long started = Stopwatch.GetTimestamp();
             done.Add(master);
+            if (LoadingPhase.IsLoading)
+            {
+                incomingWarmed.Add(master);
+            }
+
             master.PreloadAssets();
+            PinEliteDisplays(master);
             long elapsed = Stopwatch.GetTimestamp() - started;
             if (HitchProbes.Armed)
             {
@@ -306,6 +390,70 @@ namespace ROR_O
             lastName = master.name;
             warmed++;
             warmedSinceLog++;
+        }
+
+        private static void PublishProgress()
+        {
+            int left = pending.Count > cursor ? pending.Count - cursor : 0;
+            LoadingProgress.Set("Mobs", warmed, warmed + left, left > 0);
+            LoadingProgress.Set("Elite displays", warmed, warmed + left, left > 0 && eliteDisplays > 0);
+        }
+
+        // An elite is equipment on an ordinary spawn, so there is no elite master to preload.
+        // What the first elite spawn does pay is instantiating that body's display for the
+        // elite equipment. Pinning the display prefabs in every available elite rule of this
+        // body turns that spawn-time WaitForCompletion into a load that already happened.
+        // Pins are run-scoped and each address is requested once per run.
+        private static void PinEliteDisplays(CharacterMaster master)
+        {
+            if (!EliteCatalog.availability.available)
+            {
+                return;
+            }
+
+            GameObject? bodyPrefab = master.bodyPrefab;
+            if (!bodyPrefab || !bodyPrefab.TryGetComponent(out ModelLocator? locator) || locator == null || !locator.modelTransform)
+            {
+                return;
+            }
+
+            if (!locator.modelTransform.TryGetComponent(out CharacterModel? model) || model == null || !model.itemDisplayRuleSet)
+            {
+                return;
+            }
+
+            ItemDisplayRuleSet ruleSet = model.itemDisplayRuleSet;
+            foreach (EliteIndex eliteIndex in EliteCatalog.eliteList)
+            {
+                EliteDef? eliteDef = EliteCatalog.GetEliteDef(eliteIndex);
+                if (eliteDef == null || !eliteDef.eliteEquipmentDef || !eliteDef.IsAvailable())
+                {
+                    continue;
+                }
+
+                DisplayRuleGroup group = ruleSet.GetEquipmentDisplayRuleGroup(eliteDef.eliteEquipmentDef.equipmentIndex);
+                if (group.rules == null)
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < group.rules.Length; i++)
+                {
+                    AssetReferenceGameObject? address = group.rules[i].followerPrefabAddress;
+                    if (address == null || !address.RuntimeKeyIsValid())
+                    {
+                        continue;
+                    }
+
+                    if (!eliteDisplayPins.Add(address.RuntimeKey.ToString()))
+                    {
+                        continue;
+                    }
+
+                    EffectPools.PinAddress(new AssetReferenceT<GameObject>(address.AssetGUID));
+                    eliteDisplays++;
+                }
+            }
         }
 
         private static void CollectSelectedMasters()
@@ -377,6 +525,7 @@ namespace ROR_O
             statusBuilder.Append("  missing ").Append(missing);
             statusBuilder.Append("\nStage list ").Append(stageBodies).Append(" added ").Append(stageQueued);
             statusBuilder.Append("  bosses ").Append(bossesListed).Append(" added ").Append(bossesQueued);
+            statusBuilder.Append("  elite displays pinned ").Append(eliteDisplays);
             statusBuilder.Append("  network list ").Append(networkListed).Append(" added ").Append(networkQueued);
             statusBuilder.Append("\nPer frame ").Append(Clamp(mastersPerFrame?.Value ?? 1, 1, 4));
             statusBuilder.Append("  skip long ").Append(skipLongFrames?.Value == true ? "on" : "off");
@@ -451,6 +600,10 @@ namespace ROR_O
                     if (prefab && prefab.TryGetComponent(out CharacterMaster master) && Enqueue(master))
                     {
                         networkQueued++;
+                        if (LoadingPhase.IsLoading)
+                        {
+                            incomingMasters.Add(master);
+                        }
                     }
                 }
 
@@ -479,6 +632,72 @@ namespace ROR_O
 
                 requestedMasters = (HashSet<MasterCatalog.MasterIndex>)field.GetValue(null);
                 return requestedMasters;
+            }
+        }
+
+        // The game parks the master list while the scene is still loading and only calls
+        // PreloadRequestedMastersCache once the load is done, which wastes the whole window.
+        // During loading, run the cache through the slicing prefix above right away; the
+        // parked subscription later finds an empty cache and does nothing.
+        [HarmonyPatch(typeof(NetworkPreloadManager), "HandleMasterPreloadMessage")]
+        private static class UseLoadingWindowForMasterList
+        {
+            private static MethodInfo? preloadCache;
+            private static bool missingMethodLogged;
+
+            private static void Postfix()
+            {
+                if (!Enabled || !LoadingPhase.IsLoading)
+                {
+                    return;
+                }
+
+                if (preloadCache == null)
+                {
+                    preloadCache = AccessTools.Method(typeof(NetworkPreloadManager), "PreloadRequestedMastersCache");
+                    if (preloadCache == null)
+                    {
+                        if (!missingMethodLogged)
+                        {
+                            missingMethodLogged = true;
+                            RORO.GlobalLogger?.LogWarning("Stage spawn prewarm could not start the master preload during loading; it will run after the stage loads.");
+                        }
+
+                        return;
+                    }
+                }
+
+                preloadCache.Invoke(null, null);
+            }
+        }
+
+        // Stage entry goes through RespawnCharacter and grants no buff. The 3 second Immune
+        // buff exists only on revive respawns. This adds 5 seconds for every player whose
+        // body is not the listen host's, and it runs on the server because AddTimedBuff
+        // from the joining client would not be authoritative.
+        [HarmonyPatch(typeof(Stage), nameof(Stage.RespawnCharacter))]
+        private static class GrantLateSpawnImmunity
+        {
+            private static void Postfix(CharacterMaster characterMaster)
+            {
+                if (lateSpawnImmunity?.Value != true || !NetworkServer.active || !characterMaster)
+                {
+                    return;
+                }
+
+                PlayerCharacterMasterController? player = characterMaster.playerCharacterMasterController;
+                if (!player || !player.networkUser || player.networkUser.isLocalPlayer)
+                {
+                    return;
+                }
+
+                CharacterBody? body = characterMaster.GetBody();
+                if (!body)
+                {
+                    return;
+                }
+
+                body.AddTimedBuff(RoR2Content.Buffs.Immune, LateSpawnImmunitySeconds);
             }
         }
     }

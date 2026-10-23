@@ -317,10 +317,12 @@ namespace ROR_O
                 SkipLongSpawnFrames = SpawnPrewarm.SkipLongFramesEntry,
                 ShowMobStatus = SpawnPrewarm.ShowStatusEntry,
                 LogMobStatus = SpawnPrewarm.LogStatusEntry,
+                LateSpawnImmunity = SpawnPrewarm.LateSpawnImmunityEntry,
                 EffectsProfile = EffectRuntime.Profile,
                 EnableEffectWarmup = EffectRuntime.WarmEffects,
                 KeepEffectPools = EffectRuntime.KeepPoolsEntry,
                 WarmPeakCopies = EffectRuntime.WarmPeakCopiesEntry,
+                WarmAllEffectCopies = EffectRuntime.WarmAllCopiesEntry,
                 EffectLoadsPerFrame = EffectRuntime.LoadsPerFrameEntry,
                 EffectWarmsPerFrame = EffectRuntime.WarmsPerFrameEntry,
                 ShowEffectStatus = EffectRuntime.ShowStatusEntry,
@@ -357,6 +359,7 @@ namespace ROR_O
             RiskOfOptionsIntegration.Publish();
             gameObject.AddComponent<SpawnPrewarm>();
             gameObject.AddComponent<EffectRuntime>();
+            gameObject.AddComponent<LoadingProgressView>();
         }
     }
 }

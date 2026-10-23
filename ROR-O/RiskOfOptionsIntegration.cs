@@ -48,10 +48,12 @@ namespace ROR_O
         public ConfigEntry<bool>? SkipLongSpawnFrames { get; set; }
         public ConfigEntry<bool>? ShowMobStatus { get; set; }
         public ConfigEntry<bool>? LogMobStatus { get; set; }
+        public ConfigEntry<bool>? LateSpawnImmunity { get; set; }
         public ConfigEntry<SettingsProfiles.Profile>? EffectsProfile { get; set; }
         public ConfigEntry<bool>? EnableEffectWarmup { get; set; }
         public ConfigEntry<bool>? KeepEffectPools { get; set; }
         public ConfigEntry<int>? WarmPeakCopies { get; set; }
+        public ConfigEntry<bool>? WarmAllEffectCopies { get; set; }
         public ConfigEntry<int>? EffectLoadsPerFrame { get; set; }
         public ConfigEntry<int>? EffectWarmsPerFrame { get; set; }
         public ConfigEntry<bool>? ShowEffectStatus { get; set; }
@@ -179,12 +181,14 @@ namespace ROR_O
             menu.CheckBox(catalog.SkipLongSpawnFrames, spawnPrewarmOff);
             menu.CheckBox(catalog.ShowMobStatus);
             menu.CheckBox(catalog.LogMobStatus);
+            menu.CheckBox(catalog.LateSpawnImmunity, null, "<color=#FFDD44>Late Spawn Immunity</color>");
 
             menu.Choice(catalog.EffectsProfile);
             Func<bool> effectWarmupOff = () => catalog.EnableEffectWarmup?.Value != true;
             menu.CheckBox(catalog.EnableEffectWarmup);
             menu.CheckBox(catalog.KeepEffectPools);
             menu.IntSlider(catalog.WarmPeakCopies, 0, 8, effectWarmupOff);
+            menu.CheckBox(catalog.WarmAllEffectCopies, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm All Effect Copies");
             menu.IntSlider(catalog.EffectLoadsPerFrame, 1, 8, effectWarmupOff);
             menu.IntSlider(catalog.EffectWarmsPerFrame, 1, 2, effectWarmupOff);
             menu.CheckBox(catalog.ShowEffectStatus);
@@ -275,14 +279,21 @@ namespace ROR_O
                 Add("RiskOfOptions.Options.ChoiceOption", entry, config);
             }
 
-            public void CheckBox(ConfigEntry<bool>? entry, Func<bool>? disabledWhen = null)
+            public void CheckBox(ConfigEntry<bool>? entry, Func<bool>? disabledWhen = null, string? displayName = null)
             {
                 if (entry == null)
                 {
                     return;
                 }
 
-                object? config = disabledWhen == null ? null : CreateConfig("RiskOfOptions.OptionConfigs.CheckBoxConfig", entry, disabledWhen);
+                object? config = disabledWhen == null && displayName == null
+                    ? null
+                    : CreateConfig("RiskOfOptions.OptionConfigs.CheckBoxConfig", entry, disabledWhen);
+                if (config != null && displayName != null)
+                {
+                    Set(config, "name", displayName);
+                }
+
                 Add("RiskOfOptions.Options.CheckBoxOption", entry, config);
             }
 

@@ -32,6 +32,7 @@ namespace ROR_O
         private static ConfigEntry<bool>? warmEffects;
         private static ConfigEntry<bool>? keepPools;
         private static ConfigEntry<int>? warmPeakCopies;
+        private static ConfigEntry<bool>? warmAllCopies;
         private static ConfigEntry<int>? loadsPerFrame;
         private static ConfigEntry<int>? warmsPerFrame;
         private static ConfigEntry<bool>? showStatus;
@@ -59,6 +60,7 @@ namespace ROR_O
         private static float warmNotBefore;
         private static float sceneReadyTime;
         private static Run? observedRun;
+        private static bool allCopiesQueued;
         private static string statusText = "Effect status is not ready yet.";
         private static GUIStyle? statusStyle;
 
@@ -66,6 +68,7 @@ namespace ROR_O
         internal static ConfigEntry<bool>? WarmEffects => warmEffects;
         internal static ConfigEntry<bool>? KeepPoolsEntry => keepPools;
         internal static ConfigEntry<int>? WarmPeakCopiesEntry => warmPeakCopies;
+        internal static ConfigEntry<bool>? WarmAllCopiesEntry => warmAllCopies;
         internal static ConfigEntry<int>? LoadsPerFrameEntry => loadsPerFrame;
         internal static ConfigEntry<int>? WarmsPerFrameEntry => warmsPerFrame;
         internal static ConfigEntry<bool>? ShowStatusEntry => showStatus;
@@ -95,6 +98,12 @@ namespace ROR_O
                 4,
                 "Most inactive copies to build ahead of time for an effect this run actually uses, based on how many copies it has had in use at once. Zero only pins the prefabs.");
 
+            warmAllCopies = config.Bind(
+                section,
+                "Warm All Effect Copies",
+                false,
+                "<color=#FFDD44>[Experimental]</color> At the start of a stage, instantiates inactive copies of every poolable effect, up to Warm Peak Copies each, instead of only the effects this run has already used. Copies are scene objects, so this runs after the loading screen, and it can stall the opening of a stage.");
+
             loadsPerFrame = config.Bind(
                 section,
                 "Asset Loads Per Frame",
@@ -123,6 +132,7 @@ namespace ROR_O
             SettingsProfiles.Add(warmEffects, true, true, true);
             SettingsProfiles.Add(keepPools, true, true, true);
             SettingsProfiles.Add(warmPeakCopies, 2, 4, 6);
+            SettingsProfiles.Add(warmAllCopies, false, false, false);
             SettingsProfiles.Add(loadsPerFrame, 2, 4, 4);
             SettingsProfiles.Add(warmsPerFrame, 1, 1, 1);
             SettingsProfiles.Add(showStatus, false, false, false);
@@ -221,6 +231,7 @@ namespace ROR_O
             System.Array.Clear(prefabs, 0, prefabs.Length);
             warmQueue.Clear();
             System.Array.Clear(queued, 0, queued.Length);
+            allCopiesQueued = false;
             for (int i = 0; i < peakInUse.Length; i++)
             {
                 if (peakInUse[i] > 0)
@@ -238,7 +249,7 @@ namespace ROR_O
                 return;
             }
 
-            if (NetworkManager.IsSceneLoadingAsynchronously || EffectManager.DisableAllEffectSpawning)
+            if (EffectManager.DisableAllEffectSpawning)
             {
                 return;
             }
@@ -255,22 +266,29 @@ namespace ROR_O
                 return;
             }
 
-            // Starting an Addressables load and instantiating a copy are both main-thread work.
-            // A frame that already ran long gets neither; the old overdue rule did the opposite and
-            // forced a warm onto exactly those frames once two seconds had passed.
+            // The loading window is for asset loads only. Pins are Addressables load starts,
+            // which survive scene activation, so they keep running under FadeToBlack. Pool
+            // copies are scene objects and would be destroyed at activation, so building
+            // them still waits for the new stage below.
+            bool loading = LoadingPhase.IsLoading;
             float frameSeconds = Time.unscaledDeltaTime;
-            if (frameSeconds > HitchFrameSeconds || Time.unscaledTime < warmNotBefore)
+            bool frameBlocked = !loading && (frameSeconds > HitchFrameSeconds || Time.unscaledTime < warmNotBefore);
+            if (!frameBlocked)
             {
-                return;
+                int loads = Clamp(loadsPerFrame?.Value ?? 4, 1, 8);
+                int started = 0;
+                while (pinCursor < count && started < loads)
+                {
+                    Pin(pinCursor);
+                    pinCursor++;
+                    started++;
+                }
             }
 
-            int loads = Clamp(loadsPerFrame?.Value ?? 4, 1, 8);
-            int started = 0;
-            while (pinCursor < count && started < loads)
+            LoadingProgress.Set("Effect prefabs", pinCursor, count, pinCursor < count);
+            if (loading)
             {
-                Pin(pinCursor);
-                pinCursor++;
-                started++;
+                return;
             }
 
             // Copies are built only after a run exists. Doing it in the menu instantiates effects
@@ -286,39 +304,82 @@ namespace ROR_O
             if (observedRun != run)
             {
                 observedRun = run;
+                allCopiesQueued = false;
                 System.Array.Clear(peakInUse, 0, peakInUse.Length);
                 System.Array.Clear(warmed, 0, warmed.Length);
                 warmQueue.Clear();
                 System.Array.Clear(queued, 0, queued.Length);
             }
 
-            if (warmQueue.Count == 0)
+            bool warmAll = warmAllCopies?.Value == true && PeakCap() > 0;
+            if (warmAll && !allCopiesQueued)
             {
+                for (int i = 0; i < count; i++)
+                {
+                    EnqueueWarm(i);
+                }
+
+                allCopiesQueued = true;
+            }
+
+            if (!warmAll)
+            {
+                allCopiesQueued = false;
+            }
+
+            int waiting = warmQueue.Count;
+            if (waiting == 0)
+            {
+                PublishCopyProgress(warmAll, count, 0);
                 return;
             }
 
-            bool busy = CharacterBody.readOnlyInstancesList.Count > 1;
+            // The whole-catalog pass cannot fit in the fade: activation destroys the copies.
+            // The opening of the stage is the next quiet stretch, so that pass spends the
+            // loading budget there. After it, and for the ordinary peak pass, a long frame
+            // or a recent expensive copy still waits.
             bool opening = Time.unscaledTime - sceneReadyTime < 15f;
-            bool calm = frameSeconds <= CalmFrameSeconds;
-            bool throttled = Time.unscaledTime - lastWarmTime < BusyWarmIntervalSeconds;
-            if (!opening && busy)
+            bool rush = warmAll && opening;
+            if (!rush)
             {
-                if (throttled)
+                if (frameBlocked)
                 {
+                    PublishCopyProgress(warmAll, count, waiting);
                     return;
                 }
-            }
-            else if (!calm && throttled)
-            {
-                return;
+
+                bool busy = CharacterBody.readOnlyInstancesList.Count > 1;
+                bool calm = frameSeconds <= CalmFrameSeconds;
+                bool throttled = Time.unscaledTime - lastWarmTime < BusyWarmIntervalSeconds;
+                bool combatWait = !opening && busy;
+                if (throttled && (combatWait || !calm))
+                {
+                    PublishCopyProgress(warmAll, count, waiting);
+                    return;
+                }
             }
 
             int budget = Clamp(warmsPerFrame?.Value ?? 1, 1, 2);
             int built = 0;
-            int checks = warmQueue.Count;
-            while (built < budget && checks-- > 0 && warmQueue.Count > 0)
+            int checks = waiting;
+            long frameStart = Stopwatch.GetTimestamp();
+            int processed = 0;
+            while (checks-- > 0 && warmQueue.Count > 0)
             {
+                if (rush)
+                {
+                    if (LoadingPhase.BudgetExpired(frameStart, processed))
+                    {
+                        break;
+                    }
+                }
+                else if (built >= budget)
+                {
+                    break;
+                }
+
                 int index = warmQueue.Dequeue();
+                processed++;
                 if (index >= queued.Length)
                 {
                     continue;
@@ -337,6 +398,20 @@ namespace ROR_O
                     EnqueueWarm(index);
                 }
             }
+
+            PublishCopyProgress(warmAll, count, warmQueue.Count);
+        }
+
+        private static void PublishCopyProgress(bool warmAll, int catalog, int waiting)
+        {
+            int done = warmAll ? catalog - waiting : warmedPrefabs;
+            int total = warmAll ? catalog : warmedPrefabs + waiting;
+            if (done < 0)
+            {
+                done = 0;
+            }
+
+            LoadingProgress.Set("Effect copies", done, total, waiting > 0);
         }
 
         private static void MaybeLogStatus()
@@ -379,7 +454,7 @@ namespace ROR_O
                 statusStyle.normal.textColor = Color.white;
             }
 
-            GUI.Label(new Rect(16f, 16f, 720f, 180f), statusText, statusStyle);
+            GUI.Label(new Rect(16f, 16f + LoadingProgressView.BlockHeight, 720f, 180f), statusText, statusStyle);
         }
 
         private static int EnsureCatalog()
@@ -632,9 +707,19 @@ namespace ROR_O
             return parked;
         }
 
+        private static int PeakCap()
+        {
+            return Clamp(warmPeakCopies?.Value ?? 4, 0, 8);
+        }
+
         private static int PeakTarget(int index)
         {
-            int cap = Clamp(warmPeakCopies?.Value ?? 4, 0, 8);
+            int cap = PeakCap();
+            if (warmAllCopies?.Value == true)
+            {
+                return cap;
+            }
+
             int peak = index >= 0 && index < peakInUse.Length ? peakInUse[index] : 0;
             return peak < cap ? peak : cap;
         }
