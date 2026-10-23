@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -761,7 +762,8 @@ namespace ROR_O
         {
             RORO.GlobalLogger?.LogInfo(
                 "Hitch watch phases: update, late update, fixed update, render, wait. "
-                + "detail column: n.phys/n.part/n.anim/n.canvas/n.skin are microseconds of those native player-loop steps; "
+                + "detail column: n.phys/n.part/n.anim/n.canvas/n.skin/n.finish/n.rndrs/n.present/n.scene/n.uicam are microseconds of those native player-loop steps. "
+                + "n.finish, n.rndrs and n.present sit inside render_ms. n.scene and n.uicam are the two cameras inside n.finish. "
                 + "a method is microseconds/calls per frame. GC.Collect recorder="
                 + (recorderOn[(int)Metric.Gc] ? "on" : "missing"));
             if (Chainloader.PluginInfos.ContainsKey("MonoProfiler"))
@@ -1078,6 +1080,8 @@ namespace ROR_O
             }
 
             InstallNativeBrackets(stages);
+            Camera.onPreCull += OnCameraPreCull;
+            Camera.onPostRender += OnCameraPostRender;
             root.subSystemList = stages;
             PlayerLoop.SetPlayerLoop(root);
             phasesInstalled = true;
@@ -1092,6 +1096,9 @@ namespace ROR_O
             bool animEnd = false;
             bool canvas = false;
             bool skin = false;
+            bool finish = false;
+            bool renderers = false;
+            bool present = false;
             for (int i = 0; i < stages.Length; i++)
             {
                 physics |= Bracket(ref stages[i], typeof(FixedUpdate.PhysicsFixedUpdate), typeof(HitchPhysicsBegin), OnPhysicsBegin, typeof(HitchPhysicsEnd), OnPhysicsEnd);
@@ -1101,6 +1108,9 @@ namespace ROR_O
                 animEnd |= Bracket(ref stages[i], typeof(PreLateUpdate.DirectorUpdateAnimationEnd), typeof(HitchAnimSyncBegin), OnAnimBegin, typeof(HitchAnimSyncEnd), OnAnimEnd);
                 canvas |= Bracket(ref stages[i], typeof(PostLateUpdate.PlayerUpdateCanvases), typeof(HitchCanvasBegin), OnCanvasBegin, typeof(HitchCanvasEnd), OnCanvasEnd);
                 skin |= Bracket(ref stages[i], typeof(PostLateUpdate.UpdateAllSkinnedMeshes), typeof(HitchSkinBegin), OnSkinBegin, typeof(HitchSkinEnd), OnSkinEnd);
+                finish |= Bracket(ref stages[i], typeof(PostLateUpdate.FinishFrameRendering), typeof(HitchFinishBegin), OnFinishBegin, typeof(HitchFinishEnd), OnFinishEnd);
+                renderers |= Bracket(ref stages[i], typeof(PostLateUpdate.UpdateAllRenderers), typeof(HitchRenderersBegin), OnRenderersBegin, typeof(HitchRenderersEnd), OnRenderersEnd);
+                present |= Bracket(ref stages[i], typeof(PostLateUpdate.PresentAfterDraw), typeof(HitchPresentBegin), OnPresentBegin, typeof(HitchPresentEnd), OnPresentEnd);
             }
 
             RORO.GlobalLogger?.LogInfo(
@@ -1109,6 +1119,9 @@ namespace ROR_O
                 + ", animation " + (animBegin && animEnd ? "on" : "missing")
                 + ", canvas " + (canvas ? "on" : "missing")
                 + ", skinned meshes " + (skin ? "on" : "missing")
+                + ", finish frame " + (finish ? "on" : "missing")
+                + ", renderers " + (renderers ? "on" : "missing")
+                + ", present " + (present ? "on" : "missing")
                 + ".");
         }
 
@@ -1184,6 +1197,8 @@ namespace ROR_O
 
             root.subSystemList = stages;
             PlayerLoop.SetPlayerLoop(root);
+            Camera.onPreCull -= OnCameraPreCull;
+            Camera.onPostRender -= OnCameraPostRender;
             phasesInstalled = false;
         }
 
@@ -1235,7 +1250,13 @@ namespace ROR_O
                 || type == typeof(HitchCanvasBegin)
                 || type == typeof(HitchCanvasEnd)
                 || type == typeof(HitchSkinBegin)
-                || type == typeof(HitchSkinEnd);
+                || type == typeof(HitchSkinEnd)
+                || type == typeof(HitchFinishBegin)
+                || type == typeof(HitchFinishEnd)
+                || type == typeof(HitchRenderersBegin)
+                || type == typeof(HitchRenderersEnd)
+                || type == typeof(HitchPresentBegin)
+                || type == typeof(HitchPresentEnd);
         }
 
         private static PlayerLoopSystem StripMarkers(PlayerLoopSystem node)
@@ -1284,6 +1305,13 @@ namespace ROR_O
         private static long animStamp;
         private static long canvasStamp;
         private static long skinStamp;
+        private static long finishStamp;
+        private static long renderersStamp;
+        private static long presentStamp;
+        private static long sceneStamp;
+        private static long uiCamStamp;
+        private static bool sceneOpen;
+        private static bool uiCamOpen;
 
         private static void OnPhysicsBegin()
         {
@@ -1335,6 +1363,100 @@ namespace ROR_O
             HitchProbes.AddPhase(HitchProbes.Phase.Skin, Stopwatch.GetTimestamp() - skinStamp);
         }
 
+        private static void OnFinishBegin()
+        {
+            finishStamp = Stopwatch.GetTimestamp();
+        }
+
+        private static void OnFinishEnd()
+        {
+            HitchProbes.AddPhase(HitchProbes.Phase.Finish, Stopwatch.GetTimestamp() - finishStamp);
+        }
+
+        private static void OnRenderersBegin()
+        {
+            renderersStamp = Stopwatch.GetTimestamp();
+        }
+
+        private static void OnRenderersEnd()
+        {
+            HitchProbes.AddPhase(HitchProbes.Phase.Renderers, Stopwatch.GetTimestamp() - renderersStamp);
+        }
+
+        private static void OnPresentBegin()
+        {
+            presentStamp = Stopwatch.GetTimestamp();
+        }
+
+        private static void OnPresentEnd()
+        {
+            HitchProbes.AddPhase(HitchProbes.Phase.Present, Stopwatch.GetTimestamp() - presentStamp);
+        }
+
+        // Camera.onPreCull runs before that camera culls, Camera.onPostRender after it has drawn.
+        // Post-process command buffers on sceneCam execute between those two, so n.scene includes them.
+        // n.uicam is the HUD camera on the same rig. The two do not nest.
+        private static void OnCameraPreCull(Camera camera)
+        {
+            if (!HitchProbes.Armed || !camera)
+            {
+                return;
+            }
+
+            if (camera.TryGetComponent<SceneCamera>(out _))
+            {
+                sceneStamp = Stopwatch.GetTimestamp();
+                sceneOpen = true;
+                return;
+            }
+
+            if (!IsUiCamera(camera))
+            {
+                return;
+            }
+
+            uiCamStamp = Stopwatch.GetTimestamp();
+            uiCamOpen = true;
+        }
+
+        private static void OnCameraPostRender(Camera camera)
+        {
+            if (!HitchProbes.Armed || !camera)
+            {
+                return;
+            }
+
+            if (sceneOpen && camera.TryGetComponent<SceneCamera>(out _))
+            {
+                sceneOpen = false;
+                HitchProbes.AddPhase(HitchProbes.Phase.Scene, Stopwatch.GetTimestamp() - sceneStamp);
+                return;
+            }
+
+            if (!uiCamOpen || !IsUiCamera(camera))
+            {
+                return;
+            }
+
+            uiCamOpen = false;
+            HitchProbes.AddPhase(HitchProbes.Phase.UiCam, Stopwatch.GetTimestamp() - uiCamStamp);
+        }
+
+        private static bool IsUiCamera(Camera camera)
+        {
+            ReadOnlyCollection<CameraRigController> rigs = CameraRigController.readOnlyInstancesList;
+            for (int i = 0; i < rigs.Count; i++)
+            {
+                CameraRigController rig = rigs[i];
+                if (rig && rig.uiCam == camera)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private struct HitchPhysicsBegin { }
         private struct HitchPhysicsEnd { }
         private struct HitchParticlesBegin { }
@@ -1349,6 +1471,12 @@ namespace ROR_O
         private struct HitchCanvasEnd { }
         private struct HitchSkinBegin { }
         private struct HitchSkinEnd { }
+        private struct HitchFinishBegin { }
+        private struct HitchFinishEnd { }
+        private struct HitchRenderersBegin { }
+        private struct HitchRenderersEnd { }
+        private struct HitchPresentBegin { }
+        private struct HitchPresentEnd { }
 
         private static void OnFrameBegin()
         {
