@@ -248,7 +248,7 @@ namespace ROR_O
         private void Update()
         {
             MaybeLogStatus();
-            if (!Enabled || cursor >= pending.Count)
+            if (!Enabled || cursor >= pending.Count || LoadingPhase.IsStartupSplash(SceneManager.GetActiveScene().name))
             {
                 sceneHold = false;
                 return;

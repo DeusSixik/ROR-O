@@ -346,7 +346,7 @@ namespace ROR_O
             }
 
             string sceneName = SceneManager.GetActiveScene().name;
-            if (sceneName.StartsWith("loading", System.StringComparison.OrdinalIgnoreCase))
+            if (sceneName.StartsWith("loading", System.StringComparison.OrdinalIgnoreCase) || LoadingPhase.IsStartupSplash(sceneName))
             {
                 return;
             }

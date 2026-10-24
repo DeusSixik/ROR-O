@@ -20,6 +20,13 @@ namespace ROR_O
 
         internal static bool IsLoading => NetworkManager.IsSceneLoadingAsynchronously;
 
+        // The splash scene is the boot screen before the title menu. Pinning there stalled
+        // the launch for seconds. The title and the lobby are the menu and keep preloading.
+        internal static bool IsStartupSplash(string sceneName)
+        {
+            return sceneName.Equals("splash", System.StringComparison.OrdinalIgnoreCase);
+        }
+
         internal static bool BudgetExpired(long startedTimestamp, int processed)
         {
             if (processed <= 0)
