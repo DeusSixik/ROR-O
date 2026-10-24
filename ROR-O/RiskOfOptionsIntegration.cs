@@ -56,6 +56,10 @@ namespace ROR_O
         public ConfigEntry<bool>? WarmAllEffectCopies { get; set; }
         public ConfigEntry<int>? EffectLoadsPerFrame { get; set; }
         public ConfigEntry<int>? EffectWarmsPerFrame { get; set; }
+        public ConfigEntry<bool>? CullSecondaryEffects { get; set; }
+        public ConfigEntry<float>? EffectCullDistance { get; set; }
+        public ConfigEntry<bool>? CullEffectsOffScreen { get; set; }
+        public ConfigEntry<int>? EffectCullInterval { get; set; }
         public ConfigEntry<bool>? ShowEffectStatus { get; set; }
         public ConfigEntry<bool>? LogEffectStatus { get; set; }
         public ConfigEntry<bool>? EnableHitchWatch { get; set; }
@@ -191,6 +195,11 @@ namespace ROR_O
             menu.CheckBox(catalog.WarmAllEffectCopies, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm All Effect Copies");
             menu.IntSlider(catalog.EffectLoadsPerFrame, 1, 8, effectWarmupOff);
             menu.IntSlider(catalog.EffectWarmsPerFrame, 1, 2, effectWarmupOff);
+            Func<bool> effectCullOff = () => catalog.CullSecondaryEffects?.Value != true;
+            menu.CheckBox(catalog.CullSecondaryEffects);
+            menu.StepSlider(catalog.EffectCullDistance, 10f, 200f, 5f, "0", effectCullOff);
+            menu.CheckBox(catalog.CullEffectsOffScreen, effectCullOff);
+            menu.IntSlider(catalog.EffectCullInterval, 1, 20, effectCullOff);
             menu.CheckBox(catalog.ShowEffectStatus);
             menu.CheckBox(catalog.LogEffectStatus);
 

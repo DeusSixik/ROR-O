@@ -325,6 +325,10 @@ namespace ROR_O
                 WarmAllEffectCopies = EffectRuntime.WarmAllCopiesEntry,
                 EffectLoadsPerFrame = EffectRuntime.LoadsPerFrameEntry,
                 EffectWarmsPerFrame = EffectRuntime.WarmsPerFrameEntry,
+                CullSecondaryEffects = EffectRuntime.CullSecondary,
+                EffectCullDistance = EffectRuntime.CullDistanceEntry,
+                CullEffectsOffScreen = EffectRuntime.CullOffScreenEntry,
+                EffectCullInterval = EffectRuntime.CullIntervalEntry,
                 ShowEffectStatus = EffectRuntime.ShowStatusEntry,
                 LogEffectStatus = EffectRuntime.LogStatusEntry,
             });

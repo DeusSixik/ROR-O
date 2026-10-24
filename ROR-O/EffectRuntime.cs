@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Text;
 using BepInEx.Configuration;
@@ -28,6 +29,8 @@ namespace ROR_O
         private const float BusyWarmIntervalSeconds = 0.5f;
         private const float ExpensiveWarmMs = 3f;
         private static readonly Vector3 Park = new Vector3(0f, -5000f, 0f);
+        private static readonly Vector3 CullBounds = new Vector3(12f, 12f, 12f);
+        private static readonly Plane[] Frustum = new Plane[6];
 
         private static ConfigEntry<bool>? warmEffects;
         private static ConfigEntry<bool>? keepPools;
@@ -35,11 +38,16 @@ namespace ROR_O
         private static ConfigEntry<bool>? warmAllCopies;
         private static ConfigEntry<int>? loadsPerFrame;
         private static ConfigEntry<int>? warmsPerFrame;
+        private static ConfigEntry<bool>? cullSecondary;
+        private static ConfigEntry<float>? cullDistance;
+        private static ConfigEntry<bool>? cullOffScreen;
+        private static ConfigEntry<int>? cullInterval;
         private static ConfigEntry<bool>? showStatus;
         private static ConfigEntry<bool>? logStatus;
         private static float nextLogTime;
 
         private static readonly StringBuilder statusBuilder = new StringBuilder(384);
+        private static readonly Dictionary<VFXAttributes, EffectCullState> gates = new Dictionary<VFXAttributes, EffectCullState>();
         private static readonly Queue<int> warmQueue = new Queue<int>();
         // Reused across warms: checking out several helpers at once is the only way to make a pool
         // grow past the copies it already holds. Returning each one immediately re-pops the same copy.
@@ -56,9 +64,14 @@ namespace ROR_O
         private static int pinCursor;
         private static int warmedPrefabs;
         private static int instancesBuilt;
+        private static int culledEffects;
+        private static int frame;
         private static float lastWarmTime;
         private static float warmNotBefore;
+        private static bool frustumReady;
         private static float sceneReadyTime;
+        private static Camera? gameplayCamera;
+        private static bool cullWasEnabled;
         private static Run? observedRun;
         private static bool allCopiesQueued;
         private static string statusText = "Effect status is not ready yet.";
@@ -71,6 +84,10 @@ namespace ROR_O
         internal static ConfigEntry<bool>? WarmAllCopiesEntry => warmAllCopies;
         internal static ConfigEntry<int>? LoadsPerFrameEntry => loadsPerFrame;
         internal static ConfigEntry<int>? WarmsPerFrameEntry => warmsPerFrame;
+        internal static ConfigEntry<bool>? CullSecondary => cullSecondary;
+        internal static ConfigEntry<float>? CullDistanceEntry => cullDistance;
+        internal static ConfigEntry<bool>? CullOffScreenEntry => cullOffScreen;
+        internal static ConfigEntry<int>? CullIntervalEntry => cullInterval;
         internal static ConfigEntry<bool>? ShowStatusEntry => showStatus;
         internal static ConfigEntry<bool>? LogStatusEntry => logStatus;
 
@@ -116,6 +133,30 @@ namespace ROR_O
                 1,
                 "How many inactive effect copies to instantiate on one calm frame.");
 
+            cullSecondary = config.Bind(
+                section,
+                "Cull Secondary Effects",
+                true,
+                "Stops secondary particle systems and optional lights past the cull distance. The game marks those as safe to turn off. Main particles and projectile hits keep running.");
+
+            cullDistance = config.Bind(
+                section,
+                "Cull Distance",
+                55f,
+                "Distance in meters at which secondary particles and optional lights stop. They resume closer than about three quarters of this.");
+
+            cullOffScreen = config.Bind(
+                section,
+                "Cull Off Screen",
+                true,
+                "Also stops secondary particles and optional lights when the effect is outside the camera. They resume once it is visible again.");
+
+            cullInterval = config.Bind(
+                section,
+                "Cull Interval",
+                4,
+                "How many frames pass between secondary-effect distance checks.");
+
             showStatus = config.Bind(
                 section,
                 "Show Effect Status",
@@ -135,6 +176,10 @@ namespace ROR_O
             SettingsProfiles.Add(warmAllCopies, false, false, false);
             SettingsProfiles.Add(loadsPerFrame, 2, 4, 4);
             SettingsProfiles.Add(warmsPerFrame, 1, 1, 1);
+            SettingsProfiles.Add(cullSecondary, false, true, true);
+            SettingsProfiles.Add(cullDistance, 80f, 55f, 28f);
+            SettingsProfiles.Add(cullOffScreen, false, true, true);
+            SettingsProfiles.Add(cullInterval, 8, 4, 2);
             SettingsProfiles.Add(showStatus, false, false, false);
             SettingsProfiles.Add(logStatus, false, false, false);
             SettingsProfiles.End();
@@ -144,6 +189,29 @@ namespace ROR_O
         {
             RefreshStatus();
             RORO.GlobalLogger?.LogInfo(statusText.Replace('\n', ' '));
+        }
+
+        internal static void NoteEffectDisabled(VFXAttributes attributes)
+        {
+            if (!attributes || !gates.TryGetValue(attributes, out EffectCullState? gate) || gate == null)
+            {
+                return;
+            }
+
+            gates.Remove(attributes);
+            if (!gate.secondaryStopped)
+            {
+                return;
+            }
+
+            // Pooling disables the effect while lights are still off. Reset restarts particles
+            // on the next spawn and does not touch these lights, so restore them here.
+            RestoreLights(attributes.optionalLights, gate);
+            gate.secondaryStopped = false;
+            if (culledEffects > 0)
+            {
+                culledEffects--;
+            }
         }
 
         // Postfix on SpawnEffect. The pool has already checked this copy out, so InUseCount is the
@@ -204,11 +272,13 @@ namespace ROR_O
         private void OnEnable()
         {
             SceneManager.sceneLoaded += OnSceneLoaded;
+            SceneManager.sceneUnloaded += OnSceneUnloaded;
         }
 
         private void OnDisable()
         {
             SceneManager.sceneLoaded -= OnSceneLoaded;
+            SceneManager.sceneUnloaded -= OnSceneUnloaded;
         }
 
         private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -239,6 +309,14 @@ namespace ROR_O
                     EnqueueWarm(i);
                 }
             }
+        }
+
+        private static void OnSceneUnloaded(Scene scene)
+        {
+            gates.Clear();
+            culledEffects = 0;
+            cullWasEnabled = false;
+            gameplayCamera = null;
         }
 
         private void Update()
@@ -430,6 +508,65 @@ namespace ROR_O
 
             nextLogTime = now + 1f;
             LogStatus();
+        }
+
+        private void LateUpdate()
+        {
+            // The menu and lobby have their own long-lived effects. Culling those, or holding a camera
+            // from the previous scene, both breaks the lobby effect and throws once that camera is gone.
+            bool inRun = (bool)Run.instance;
+            bool enabled = inRun && cullSecondary?.Value == true;
+            if (!enabled)
+            {
+                if (cullWasEnabled || culledEffects > 0)
+                {
+                    ResumeAll();
+                    cullWasEnabled = false;
+                }
+
+                return;
+            }
+
+            cullWasEnabled = true;
+            int interval = Clamp(cullInterval?.Value ?? 4, 1, 30);
+            frame++;
+            if (frame % interval != 0)
+            {
+                return;
+            }
+
+            if (!gameplayCamera)
+            {
+                gameplayCamera = Camera.main;
+            }
+
+            Camera? camera = gameplayCamera;
+            if (!camera)
+            {
+                return;
+            }
+
+            float distance = Mathf.Max(5f, cullDistance?.Value ?? 55f);
+            float stopSqr = distance * distance;
+            float resume = distance * 0.75f;
+            float resumeSqr = resume * resume;
+            bool offScreen = cullOffScreen?.Value == true;
+            // Frustum planes are built on first use inside Consider. A pass where every live
+            // effect is already past the cull distance never needs them.
+            frustumReady = false;
+
+            Vector3 cameraPosition = camera!.transform.position;
+            ReadOnlyCollection<VFXAttributes> live = VFXAttributes.readonlyVFXList;
+            for (int i = 0; i < live.Count; i++)
+            {
+                VFXAttributes? attributes = live[i];
+                if (!attributes)
+                {
+                    continue;
+                }
+
+                Consider(attributes, cameraPosition, stopSqr, resumeSqr, offScreen);
+            }
         }
 
         private void OnGUI()
@@ -724,6 +861,159 @@ namespace ROR_O
             return peak < cap ? peak : cap;
         }
 
+        private static void Consider(VFXAttributes attributes, Vector3 cameraPosition, float stopSqr, float resumeSqr, bool offScreen)
+        {
+            ParticleSystem[]? systems = attributes.secondaryParticleSystem;
+            Light[]? lights = attributes.optionalLights;
+            bool hasSecondary = systems != null && systems.Length > 0;
+            bool hasLights = lights != null && lights.Length > 0;
+            if (!hasSecondary && !hasLights)
+            {
+                return;
+            }
+
+            if (!gates.TryGetValue(attributes, out EffectCullState? gate) || gate == null)
+            {
+                gate = new EffectCullState();
+                gates[attributes] = gate;
+            }
+
+            Vector3 delta = attributes.transform.position - cameraPosition;
+            float distanceSqr = delta.sqrMagnitude;
+            bool tooFar = distanceSqr > (gate.secondaryStopped ? resumeSqr : stopSqr);
+            bool hidden = false;
+            if (!tooFar && offScreen)
+            {
+                // Distance alone already stops this effect, so the six-plane test is only
+                // paid for effects close enough to stay visible on distance grounds.
+                if (!frustumReady)
+                {
+                    Camera? camera = gameplayCamera;
+                    if (camera)
+                    {
+                        GeometryUtility.CalculateFrustumPlanes(camera, Frustum);
+                        frustumReady = true;
+                    }
+                }
+
+                if (frustumReady)
+                {
+                    hidden = !GeometryUtility.TestPlanesAABB(Frustum, new Bounds(attributes.transform.position, CullBounds));
+                }
+            }
+
+            bool stop = tooFar || hidden;
+            if (stop == gate.secondaryStopped)
+            {
+                return;
+            }
+
+            if (stop)
+            {
+                StopSecondary(systems, lights, gate);
+                gate.secondaryStopped = true;
+                culledEffects++;
+                return;
+            }
+
+            PlaySecondary(systems, lights, gate);
+            gate.secondaryStopped = false;
+            if (culledEffects > 0)
+            {
+                culledEffects--;
+            }
+        }
+
+        private static void StopSecondary(ParticleSystem[]? systems, Light[]? lights, EffectCullState gate)
+        {
+            if (systems != null)
+            {
+                for (int i = 0; i < systems.Length; i++)
+                {
+                    ParticleSystem? system = systems[i];
+                    if (system)
+                    {
+                        system.Stop(false, ParticleSystemStopBehavior.StopEmittingAndClear);
+                    }
+                }
+            }
+
+            if (lights == null)
+            {
+                return;
+            }
+
+            if (gate.lightWasEnabled == null || gate.lightWasEnabled.Length != lights.Length)
+            {
+                gate.lightWasEnabled = new bool[lights.Length];
+            }
+
+            for (int i = 0; i < lights.Length; i++)
+            {
+                Light? light = lights[i];
+                if (!light)
+                {
+                    continue;
+                }
+
+                gate.lightWasEnabled[i] = light.enabled;
+                light.enabled = false;
+            }
+        }
+
+        private static void PlaySecondary(ParticleSystem[]? systems, Light[]? lights, EffectCullState gate)
+        {
+            if (systems != null)
+            {
+                for (int i = 0; i < systems.Length; i++)
+                {
+                    ParticleSystem? system = systems[i];
+                    if (system)
+                    {
+                        system.Play(false);
+                    }
+                }
+            }
+
+            RestoreLights(lights, gate);
+        }
+
+        private static void RestoreLights(Light[]? lights, EffectCullState gate)
+        {
+            if (lights == null || gate.lightWasEnabled == null)
+            {
+                return;
+            }
+
+            int count = lights.Length < gate.lightWasEnabled.Length ? lights.Length : gate.lightWasEnabled.Length;
+            for (int i = 0; i < count; i++)
+            {
+                Light? light = lights[i];
+                if (light)
+                {
+                    light.enabled = gate.lightWasEnabled[i];
+                }
+            }
+        }
+
+        private static void ResumeAll()
+        {
+            foreach (KeyValuePair<VFXAttributes, EffectCullState> pair in gates)
+            {
+                EffectCullState? gate = pair.Value;
+                VFXAttributes? attributes = pair.Key;
+                if (gate == null || !gate.secondaryStopped || !attributes)
+                {
+                    continue;
+                }
+
+                PlaySecondary(attributes.secondaryParticleSystem, attributes.optionalLights, gate);
+                gate.secondaryStopped = false;
+            }
+
+            culledEffects = 0;
+        }
+
         private static void RefreshStatus()
         {
             int loaded = 0;
@@ -749,6 +1039,7 @@ namespace ROR_O
             statusBuilder.Append("\nPinned ").Append(pinned).Append("  loaded ").Append(loaded);
             statusBuilder.Append("\nWarmed prefabs ").Append(warmedPrefabs).Append("  copies built ").Append(instancesBuilt).Append("  peak cap ").Append(cap).Append("  queued ").Append(warmQueue.Count);
             statusBuilder.Append("\nPools ").Append(pools).Append("  idle ").Append(idle).Append("  in use ").Append(inUse);
+            statusBuilder.Append("\nLive ").Append(VFXAttributes.readonlyVFXList.Count).Append("  secondary culled ").Append(culledEffects);
             statusText = statusBuilder.ToString();
         }
 
@@ -763,4 +1054,9 @@ namespace ROR_O
         }
     }
 
+    internal sealed class EffectCullState
+    {
+        internal bool secondaryStopped;
+        internal bool[]? lightWasEnabled;
+    }
 }
