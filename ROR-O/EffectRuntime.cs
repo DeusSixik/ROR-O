@@ -230,6 +230,19 @@ namespace ROR_O
                 return;
             }
 
+            long started = HitchProbes.Armed ? Stopwatch.GetTimestamp() : 0L;
+            try
+            {
+                NoteSpawn(index);
+            }
+            finally
+            {
+                HitchProbes.Note(HitchProbes.Id.EffectPeak, started);
+            }
+        }
+
+        private static void NoteSpawn(int index)
+        {
             GameObject? prefab = prefabs[index];
             if (!prefab)
             {
@@ -353,6 +366,7 @@ namespace ROR_O
             bool frameBlocked = !loading && (frameSeconds > HitchFrameSeconds || Time.unscaledTime < warmNotBefore);
             if (!frameBlocked)
             {
+                long pinStart = HitchProbes.Armed ? Stopwatch.GetTimestamp() : 0L;
                 int loads = Clamp(loadsPerFrame?.Value ?? 4, 1, 8);
                 int started = 0;
                 while (pinCursor < count && started < loads)
@@ -360,6 +374,11 @@ namespace ROR_O
                     Pin(pinCursor);
                     pinCursor++;
                     started++;
+                }
+
+                if (started > 0)
+                {
+                    HitchProbes.Note(HitchProbes.Id.EffectPin, pinStart);
                 }
             }
 
@@ -477,6 +496,11 @@ namespace ROR_O
                 }
             }
 
+            if (processed > 0)
+            {
+                HitchProbes.Note(HitchProbes.Id.EffectWarm, frameStart);
+            }
+
             PublishCopyProgress(warmAll, count, warmQueue.Count);
         }
 
@@ -540,9 +564,11 @@ namespace ROR_O
                 gameplayCamera = Camera.main;
             }
 
+            long cullStart = HitchProbes.Armed ? Stopwatch.GetTimestamp() : 0L;
             Camera? camera = gameplayCamera;
             if (!camera)
             {
+                HitchProbes.Note(HitchProbes.Id.EffectCull, cullStart);
                 return;
             }
 
@@ -567,6 +593,8 @@ namespace ROR_O
 
                 Consider(attributes, cameraPosition, stopSqr, resumeSqr, offScreen);
             }
+
+            HitchProbes.Note(HitchProbes.Id.EffectCull, cullStart);
         }
 
         private void OnGUI()

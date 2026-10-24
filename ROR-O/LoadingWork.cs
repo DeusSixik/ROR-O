@@ -100,6 +100,7 @@ namespace ROR_O
                 return;
             }
 
+            long started = HitchProbes.Armed ? Stopwatch.GetTimestamp() : 0L;
             if (labelStyle == null)
             {
                 labelStyle = new GUIStyle(GUI.skin.label)
@@ -145,6 +146,8 @@ namespace ROR_O
                 GUI.Label(new Rect(104f, y, 520f, 26f), entry.Label, labelStyle);
                 y += RowHeight;
             }
+
+            HitchProbes.Note(HitchProbes.Id.ProgressRings, started);
         }
 
         private static Texture2D RingTexture(float fraction)

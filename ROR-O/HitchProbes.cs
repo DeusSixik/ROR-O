@@ -38,6 +38,13 @@ namespace ROR_O
             PathAgent,
             Prewarm,
             DynBone,
+            EffectPin,
+            EffectWarm,
+            EffectCull,
+            EffectPeak,
+            ElitePin,
+            SpawnImmunity,
+            ProgressRings,
             Count
         }
 
@@ -68,7 +75,14 @@ namespace ROR_O
             "BaseAI.ManagedFixedUpdate",
             "NodeGraphNavigation.UpdateAgent",
             "SpawnPrewarm.PreloadAssets",
-            "DynamicBone.LateUpdate"
+            "DynamicBone.LateUpdate",
+            "EffectRuntime.Pin",
+            "EffectRuntime.Warm",
+            "EffectRuntime.Cull",
+            "EffectRuntime.NoteSpawn",
+            "SpawnPrewarm.EliteDisplays",
+            "SpawnPrewarm.LateImmunity",
+            "LoadingProgress.Rings"
         };
 
         private static readonly long[] PhaseLive = new long[(int)Phase.Count];
@@ -105,6 +119,16 @@ namespace ROR_O
             {
                 MethodLive[index] += ticks;
             }
+        }
+
+        internal static void Note(Id id, long started)
+        {
+            if (!Armed || started == 0L)
+            {
+                return;
+            }
+
+            Add(id, Stopwatch.GetTimestamp() - started);
         }
 
         internal static void PublishFrame()

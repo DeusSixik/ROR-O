@@ -372,14 +372,16 @@ namespace ROR_O
             }
 
             master.PreloadAssets();
+            long preloaded = Stopwatch.GetTimestamp();
             PinEliteDisplays(master);
-            long elapsed = Stopwatch.GetTimestamp() - started;
+            long finished = Stopwatch.GetTimestamp();
             if (HitchProbes.Armed)
             {
-                HitchProbes.Add(HitchProbes.Id.Prewarm, elapsed);
+                HitchProbes.Add(HitchProbes.Id.Prewarm, preloaded - started);
+                HitchProbes.Add(HitchProbes.Id.ElitePin, finished - preloaded);
             }
 
-            float ms = (float)(elapsed * 1000d / Stopwatch.Frequency);
+            float ms = (float)((finished - started) * 1000d / Stopwatch.Frequency);
             lastMs = ms;
             totalMs += ms;
             if (ms > maxMs)
@@ -697,7 +699,9 @@ namespace ROR_O
                     return;
                 }
 
+                long started = HitchProbes.Armed ? Stopwatch.GetTimestamp() : 0L;
                 body.AddTimedBuff(RoR2Content.Buffs.Immune, LateSpawnImmunitySeconds);
+                HitchProbes.Note(HitchProbes.Id.SpawnImmunity, started);
             }
         }
     }
