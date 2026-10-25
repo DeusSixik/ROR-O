@@ -23,6 +23,10 @@ namespace ROR_O.patches
 
         private static Func<Array, int, float>? readDistance;
         private static Func<Array, int, HealthComponent?>? readHealth;
+        private static FieldInfo? sortMappingField;
+        private static FieldInfo? sortCountField;
+        private static FieldInfo? sortBufferField;
+        private static MethodInfo? sortHealthFilter;
 
         internal static void Install(Harmony harmony)
         {
@@ -52,13 +56,16 @@ namespace ROR_O.patches
 
                 readDistance = CompileDistance(candidate, distanceField);
                 readHealth = CompileHealth(candidate, hurtBoxField, healthField);
-                Module module = typeof(SphereSearch).Module;
+                sortMappingField = mappingField;
+                sortCountField = countField;
+                sortBufferField = bufferField;
+                sortHealthFilter = healthFilter;
                 harmony.Patch(
                     AccessTools.Method(searchData, "OrderByDistance"),
-                    new HarmonyMethod(CompileSkip(module, searchData, mappingField, countField, bufferField, nameof(Sort), false, null)));
+                    transpiler: new HarmonyMethod(typeof(OptimizeSphereSearch), nameof(SortTranspiler)));
                 harmony.Patch(
                     AccessTools.Method(searchData, "FilterByHurtBoxEntitiesDistinct"),
-                    new HarmonyMethod(CompileSkip(module, searchData, mappingField, countField, bufferField, nameof(Unique), true, healthFilter)));
+                    transpiler: new HarmonyMethod(typeof(OptimizeSphereSearch), nameof(UniqueTranspiler)));
                 RORO.GlobalLogger?.LogInfo("SphereSearch candidate walk is one pass. Stationary radial pulls reuse their target list.");
             }
             catch (Exception exception)
@@ -207,48 +214,54 @@ namespace ROR_O.patches
             return (Func<Array, int, HealthComponent?>)method.CreateDelegate(typeof(Func<Array, int, HealthComponent?>));
         }
 
-        private static DynamicMethod CompileSkip(
-            Module module,
-            Type searchData,
-            FieldInfo mappingField,
-            FieldInfo countField,
-            FieldInfo bufferField,
-            string helper,
-            bool healthFilterFirst,
-            MethodInfo? healthFilter)
+        // Harmony cannot take a DynamicMethod as a prefix ("use a factory method instead"),
+        // and SearchData is a private struct that no static prefix here can name. Replacing
+        // the whole body from a transpiler sidesteps both: the emitted calls are ordinary
+        // field loads on the ref-this plus a call to the static helper.
+        private static IEnumerable<CodeInstruction> SortTranspiler(IEnumerable<CodeInstruction> instructions)
         {
-            var method = new DynamicMethod(
-                "Roro" + helper,
-                typeof(bool),
-                new[] { searchData.MakeByRefType() },
-                module,
-                skipVisibility: true);
-            ILGenerator il = method.GetILGenerator();
-            if (healthFilterFirst && healthFilter != null)
+            var output = new List<CodeInstruction>
             {
-                il.Emit(OpCodes.Ldarg_0);
-                il.Emit(OpCodes.Call, healthFilter);
-            }
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Ldfld, sortMappingField),
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Ldfld, sortCountField),
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Ldfld, sortBufferField),
+                new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(OptimizeSphereSearch), nameof(Sort))),
+                new CodeInstruction(OpCodes.Ret)
+            };
+            MoveEntryLabels(instructions, output[0]);
+            return output;
+        }
 
-            il.Emit(OpCodes.Ldarg_0);
-            il.Emit(OpCodes.Ldfld, mappingField);
-            il.Emit(OpCodes.Ldarg_0);
-            if (helper == nameof(Unique))
+        private static IEnumerable<CodeInstruction> UniqueTranspiler(IEnumerable<CodeInstruction> instructions)
+        {
+            var output = new List<CodeInstruction>
             {
-                il.Emit(OpCodes.Ldflda, countField);
-            }
-            else
-            {
-                il.Emit(OpCodes.Ldfld, countField);
-            }
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Call, sortHealthFilter),
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Ldfld, sortMappingField),
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Ldflda, sortCountField),
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Ldfld, sortBufferField),
+                new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(OptimizeSphereSearch), nameof(Unique))),
+                new CodeInstruction(OpCodes.Ret)
+            };
+            MoveEntryLabels(instructions, output[0]);
+            return output;
+        }
 
-            il.Emit(OpCodes.Ldarg_0);
-            il.Emit(OpCodes.Ldfld, bufferField);
-            il.Emit(OpCodes.Castclass, typeof(Array));
-            il.Emit(OpCodes.Call, AccessTools.Method(typeof(OptimizeSphereSearch), helper));
-            il.Emit(OpCodes.Ldc_I4_0);
-            il.Emit(OpCodes.Ret);
-            return method;
+        private static void MoveEntryLabels(IEnumerable<CodeInstruction> original, CodeInstruction entry)
+        {
+            foreach (CodeInstruction instruction in original)
+            {
+                entry.MoveLabelsFrom(instruction);
+                entry.MoveBlocksFrom(instruction);
+                break;
+            }
         }
 
         [HarmonyPatch(typeof(RadialForce), "SearchForTargets")]
