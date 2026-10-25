@@ -46,6 +46,8 @@ namespace ROR_O
         }
         private static readonly FieldInfo? TrailField = AccessTools.Field(typeof(EffectManagerHelper), "_TrailRenderers");
         private static readonly FieldInfo? VfxField = AccessTools.Field(typeof(EffectManagerHelper), "_vfxAttributes");
+        private static readonly FieldInfo? OmniField = AccessTools.Field(typeof(EffectManagerHelper), "_OmniEffects");
+        private static readonly FieldInfo? DestroyTimerField = AccessTools.Field(typeof(EffectManagerHelper), "_destroyOnTimer");
         private static readonly FieldInfo? PoolCapacityField = AccessTools.Field(typeof(EffectPool), "poolCapacity");
         private static readonly FieldInfo? OrphanField = AccessTools.Field(typeof(EffectPool), "_OrphanedEffects");
         private static readonly FieldInfo? InUseField = FindPoolField("_InUse");
@@ -144,6 +146,16 @@ namespace ROR_O
                 }
 
                 harmony.Patch(method, postfix: new HarmonyMethod(typeof(EffectPools), nameof(WakeParkedCopy)));
+            }
+
+            MethodInfo? postActivate = AccessTools.Method(typeof(EffectManagerHelper), nameof(EffectManagerHelper.ResetPostActivate));
+            if (postActivate == null)
+            {
+                RORO.GlobalLogger?.LogWarning("EffectManagerHelper.ResetPostActivate was not found; parked OmniEffect systems stay stopped.");
+            }
+            else
+            {
+                harmony.Patch(postActivate, postfix: new HarmonyMethod(typeof(EffectPools), nameof(ReplayParkedOmni)));
             }
         }
 
@@ -641,6 +653,8 @@ namespace ROR_O
             }
 
             helper.StopAllParticleSystems(true);
+            StopOmniSystems(helper);
+            ParkDestroyTimer(helper);
             HideRenderers(helper);
             HideLights(helper);
             ClearTrails(helper);
@@ -695,6 +709,7 @@ namespace ROR_O
             }
 
             parked.Hidden = false;
+            parked.NeedsOmniPlay = true;
             if (parked.Counted)
             {
                 parked.Counted = false;
@@ -704,10 +719,25 @@ namespace ROR_O
                 }
             }
 
+            RestoreDestroyTimer(__result);
             if (VfxField?.GetValue(__result) is VFXAttributes attributes && !attributes.enabled)
             {
                 attributes.enabled = true;
             }
+        }
+
+        // SpawnEffect / GetAndActivatePooledEffect apply effectData in Reset, then call this.
+        // OmniEffect.Start already ran on the first activation and will not run again while the
+        // copy stays active, and Initialize removed those systems from Reset's play list.
+        private static void ReplayParkedOmni(EffectManagerHelper __instance)
+        {
+            if (!__instance || !Parked.TryGetValue(__instance, out ParkedCopy? parked) || parked == null || !parked.NeedsOmniPlay)
+            {
+                return;
+            }
+
+            parked.NeedsOmniPlay = false;
+            PlayOmniSystems(__instance);
         }
 
         private static ParkedCopy ParkedFor(EffectManagerHelper helper)
@@ -768,6 +798,94 @@ namespace ROR_O
             parked.Hidden = true;
         }
 
+        // Initialize removes OmniEffect systems from the copy's particle list, so Reset
+        // never restarts them. In the game they replay because activation restarts them;
+        // a copy that stays active gets no activation, so parking stops them and waking
+        // has to play them itself or the effect spawns invisible.
+        private static void StopOmniSystems(EffectManagerHelper helper)
+        {
+            if (!(OmniField?.GetValue(helper) is List<OmniEffect> omnis))
+            {
+                return;
+            }
+
+            foreach (OmniEffect omni in omnis)
+            {
+                if (!omni || omni.omniEffectGroups == null)
+                {
+                    continue;
+                }
+
+                foreach (OmniEffect.OmniEffectGroup group in omni.omniEffectGroups)
+                {
+                    foreach (OmniEffect.OmniEffectElement element in group.omniEffectElements)
+                    {
+                        if (element.particleSystem)
+                        {
+                            element.particleSystem.Stop(false, ParticleSystemStopBehavior.StopEmittingAndClear);
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void PlayOmniSystems(EffectManagerHelper helper)
+        {
+            if (!(OmniField?.GetValue(helper) is List<OmniEffect> omnis))
+            {
+                return;
+            }
+
+            foreach (OmniEffect omni in omnis)
+            {
+                if (!omni || omni.omniEffectGroups == null)
+                {
+                    continue;
+                }
+
+                foreach (OmniEffect.OmniEffectGroup group in omni.omniEffectGroups)
+                {
+                    foreach (OmniEffect.OmniEffectElement element in group.omniEffectElements)
+                    {
+                        ParticleSystem system = element.particleSystem;
+                        if (system && system.gameObject.activeSelf)
+                        {
+                            system.Play(false);
+                        }
+                    }
+                }
+            }
+        }
+
+        // A parked active copy keeps its FixedUpdate, so DestroyOnTimer ages out and then
+        // calls ReturnObject every fixed frame, refiring the return path forever. Parking
+        // disables it (its OnDisable also zeroes the age); waking re-enables it so the
+        // lifetime counts from the spawn, as it does after an activation.
+        private static void ParkDestroyTimer(EffectManagerHelper helper)
+        {
+            if (!(DestroyTimerField?.GetValue(helper) is DestroyOnTimer timer) || !timer)
+            {
+                return;
+            }
+
+            ParkedCopy parked = ParkedFor(helper);
+            parked.TimerWasEnabled = timer.enabled;
+            timer.enabled = false;
+        }
+
+        private static void RestoreDestroyTimer(EffectManagerHelper helper)
+        {
+            if (!(DestroyTimerField?.GetValue(helper) is DestroyOnTimer timer) || !timer)
+            {
+                return;
+            }
+
+            if (Parked.TryGetValue(helper, out ParkedCopy? parked) && parked != null)
+            {
+                timer.enabled = parked.TimerWasEnabled;
+            }
+        }
+
         private static void ClearTrails(EffectManagerHelper helper)
         {
             if (!(TrailField?.GetValue(helper) is List<TrailRenderer> trails))
@@ -793,6 +911,8 @@ namespace ROR_O
             internal readonly bool[] LightWasEnabled;
             internal bool Hidden;
             internal bool Counted;
+            internal bool TimerWasEnabled;
+            internal bool NeedsOmniPlay;
 
             internal ParkedCopy(Renderer[] renderers, Light[] lights)
             {
