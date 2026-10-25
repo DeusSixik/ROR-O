@@ -21,10 +21,28 @@ namespace ROR_O
         internal static bool IsLoading => NetworkManager.IsSceneLoadingAsynchronously;
 
         // The splash scene is the boot screen before the title menu. Pinning there stalled
-        // the launch for seconds. The title and the lobby are the menu and keep preloading.
+        // the launch for seconds. The intro cutscene sits between that and the title: skipping
+        // it changes the scene while a compile is on the main thread, and the game hangs.
+        // The lobby is where a run is assembled, and the character select is that same scene.
         internal static bool IsStartupSplash(string sceneName)
         {
             return sceneName.Equals("splash", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool BlocksWarmup(string sceneName)
+        {
+            if (string.IsNullOrEmpty(sceneName))
+            {
+                return true;
+            }
+
+            if (IsStartupSplash(sceneName) || sceneName.StartsWith("loading", System.StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return sceneName.Equals("intro", System.StringComparison.OrdinalIgnoreCase)
+                || sceneName.Equals("title", System.StringComparison.OrdinalIgnoreCase);
         }
 
         internal static bool BudgetExpired(long startedTimestamp, int processed)
@@ -144,12 +162,11 @@ namespace ROR_O
                     continue;
                 }
 
-                // The slot under the row still grows with the fade, so the debug readouts
-                // keep sliding. The row itself is not clipped to that slot: a group would
-                // cut the ring and the text on a horizontal line while they appear.
+                // The slot under the row still grows and shrinks with the row, so the debug
+                // readouts keep sliding. The row itself is not clipped to that slot.
                 float slot = RowHeight * row.Presence;
-                float settle = (1f - row.Presence) * 8f;
-                GUI.color = new Color(1f, 1f, 1f, row.Presence);
+                float settle = (1f - row.Presence) * 8f - row.Roll * 14f;
+                GUI.color = new Color(1f, 1f, 1f, row.Alpha);
                 Rect ring = RingRect(new Vector2(16f, y + 2f - settle));
                 GUI.DrawTexture(ring, RingTexture(row.Shown, ringPixels), ScaleMode.StretchToFill, true);
 
@@ -219,29 +236,52 @@ namespace ROR_O
                     fades.Insert(i, row);
                 }
 
-                if (live)
+                if (live || fraction < 0.999f)
                 {
-                    row.Holding = false;
+                    // Still working, or the producer paused before the end. Either way the
+                    // row stays. A rollback during the exit turns the row back from here.
+                    row.Leaving = false;
+                    row.HoldLeft = 0f;
                     row.Shown = Approach(row.Shown, fraction, dt, FractionSeconds);
                     row.Presence = Approach(row.Presence, 1f, dt, AppearSeconds);
+                    row.Alpha = Approach(row.Alpha, 1f, dt, AppearSeconds);
+                    row.Roll = Approach(row.Roll, 0f, dt, AppearSeconds);
                 }
                 else
                 {
-                    if (!row.Holding)
+                    // Finished. The number was easing and may still be short of the real
+                    // percent, so snap it: the row must not leave while it reads 46%.
+                    row.Shown = 1f;
+                    if (!row.Leaving)
                     {
-                        row.Holding = true;
+                        row.Leaving = true;
+                        row.HoldLeft = 0.35f;
                     }
 
-                    row.Presence = Approach(row.Presence, 0f, dt, FadeSeconds);
+                    if (row.HoldLeft > 0f)
+                    {
+                        row.HoldLeft -= dt;
+                        row.Presence = 1f;
+                        row.Roll = 0f;
+                        row.Alpha = Approach(row.Alpha, 0.65f, dt, 0.35f);
+                    }
+                    else
+                    {
+                        row.Alpha = Approach(row.Alpha, 0f, dt, FadeSeconds);
+                        row.Roll = Approach(row.Roll, 1f, dt, FadeSeconds);
+                        row.Presence = Approach(row.Presence, 0f, dt, FadeSeconds);
+                    }
                 }
 
-                if (!live && row.Presence < 0.004f)
+                if (row.Leaving && row.Presence < 0.004f && row.Alpha < 0.004f)
                 {
                     row.Presence = 0f;
+                    row.Alpha = 0f;
                 }
-                else if (live && row.Presence > 0.996f)
+                else if (!row.Leaving && row.Presence > 0.996f)
                 {
                     row.Presence = 1f;
+                    row.Alpha = 1f;
                 }
             }
         }
@@ -261,8 +301,11 @@ namespace ROR_O
         {
             internal string Label = "";
             internal float Presence;
+            internal float Alpha;
+            internal float Roll;
             internal float Shown;
-            internal bool Holding;
+            internal float HoldLeft;
+            internal bool Leaving;
         }
 
         // One GUI unit, measured in screen pixels, including the window scale. The ring is

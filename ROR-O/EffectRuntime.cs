@@ -145,7 +145,7 @@ namespace ROR_O
                 section,
                 "Warm Effect Shaders",
                 false,
-                "<color=#FFDD44>[Experimental]</color> During the loading screen, collects the shader variants of effect prefab materials and compiles them in batches, so the first spawn of an effect does not pay shader compilation. Variants are guessed from material keywords and may miss combinations the game uses.");
+                "<color=#FFDD44>[Experimental]</color> Collects the shader variants of effect prefab materials and compiles them, so the first spawn of an effect does not pay shader compilation. This waits until the lobby. The black screen between stages does as many as a frame can take, and whatever is left continues during play, one prefab on a short frame. The boot splash, the intro cutscene, and the title menu are left alone. Variants are guessed from material keywords and may miss combinations the game uses.");
 
             warmPeakCopies = config.Bind(
                 section,
@@ -391,7 +391,7 @@ namespace ROR_O
             }
 
             string sceneName = SceneManager.GetActiveScene().name;
-            if (sceneName.StartsWith("loading", System.StringComparison.OrdinalIgnoreCase) || LoadingPhase.IsStartupSplash(sceneName))
+            if (LoadingPhase.BlocksWarmup(sceneName))
             {
                 return;
             }
@@ -428,13 +428,16 @@ namespace ROR_O
             }
 
             LoadingProgress.Set("Effect prefabs", pinCursor, count, pinCursor < count);
+            // Shader variants are global, so a compile started under the fade is not thrown
+            // away when the stage activates. The fade spends the loading budget. The rest
+            // waits for a short frame and compiles one prefab, instead of stopping.
+            if (warmShaders?.Value == true && shaderCursor < count && (loading || !frameBlocked))
+            {
+                WarmShaderStep(count, loading);
+            }
+
             if (loading)
             {
-                if (warmShaders?.Value == true)
-                {
-                    WarmShaderStep(count);
-                }
-
                 return;
             }
 
@@ -713,11 +716,10 @@ namespace ROR_O
             settled[index] = true;
         }
 
-        // Shader compilation is global, so unlike pool copies it survives scene activation
-        // and belongs in the loading window. Variants are guessed from each material's own
-        // keywords; a combination Unity rejects is skipped, and a missed combination just
-        // compiles at its first real spawn as it does today.
-        private static void WarmShaderStep(int count)
+        // Shader compilation is global, so unlike pool copies it survives scene activation.
+        // Variants are guessed from each material's own keywords; a combination Unity rejects
+        // is skipped, and a missed combination just compiles at its first real spawn.
+        private static void WarmShaderStep(int count, bool rush)
         {
             long started = Stopwatch.GetTimestamp();
             int processed = 0;
@@ -749,12 +751,14 @@ namespace ROR_O
                     CollectShaderVariants(prefab!);
                 }
 
-                if (shaderBatchCount >= 24)
+                // In play, compile this prefab now. Saving variants up for a batch of 24
+                // would land that whole compile on one later frame.
+                if (!rush || shaderBatchCount >= 24)
                 {
                     FlushShaderBatch();
                 }
 
-                if (LoadingPhase.BudgetExpired(started, processed))
+                if (!rush || LoadingPhase.BudgetExpired(started, processed))
                 {
                     break;
                 }
@@ -763,6 +767,16 @@ namespace ROR_O
             if (shaderCursor >= count)
             {
                 FlushShaderBatch();
+            }
+
+            if (!rush)
+            {
+                float warmMs = (float)((Stopwatch.GetTimestamp() - started) * 1000d / Stopwatch.Frequency);
+                if (warmMs > ExpensiveWarmMs)
+                {
+                    float cooldown = warmMs * 0.008f;
+                    warmNotBefore = Time.unscaledTime + (cooldown > 1f ? 1f : cooldown);
+                }
             }
 
             LoadingProgress.Set("Effect shaders", shaderCursor, count, shaderCursor < count);
