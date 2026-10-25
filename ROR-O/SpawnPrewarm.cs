@@ -41,6 +41,7 @@ namespace ROR_O
         private static ConfigEntry<bool>? logStatus;
         private static ConfigEntry<bool>? lateSpawnImmunity;
         private static float nextLogTime;
+        private static float lastStatusRefresh;
 
         private const float LateSpawnImmunitySeconds = 5f;
 
@@ -329,8 +330,9 @@ namespace ROR_O
                 return;
             }
 
-            if ((Time.frameCount & 15) == 0)
+            if (Time.unscaledTime - lastStatusRefresh >= 0.5f)
             {
+                lastStatusRefresh = Time.unscaledTime;
                 RefreshStatus();
             }
 
