@@ -82,7 +82,8 @@ namespace ROR_O
         private const float RingSize = 22f;
 
         private static readonly string[] Percents = BuildPercents();
-        private static readonly Texture2D?[] Rings = new Texture2D?[51];
+        private static Texture2D?[] rings = new Texture2D?[51];
+        private static int ringPixels;
 
         private static GUIStyle? labelStyle;
 
@@ -137,10 +138,12 @@ namespace ROR_O
                     fraction = 1f;
                 }
 
-                var ring = new Rect(16f, y + 2f, RingSize, RingSize);
                 if (Event.current.type == EventType.Repaint)
                 {
-                    GUI.DrawTexture(ring, RingTexture(fraction));
+                    // The box is 22 GUI units. Its screen size changes with the window and the
+                    // DPI scale, the same scale the font rasterizer uses for the label beside it.
+                    Rect ring = RingRect(new Vector2(16f, y + 2f));
+                    GUI.DrawTexture(ring, RingTexture(fraction, ringPixels), ScaleMode.StretchToFill, true);
                 }
 
                 int percent = (int)(fraction * 100f + 0.5f);
@@ -157,7 +160,50 @@ namespace ROR_O
             HitchProbes.Note(HitchProbes.Id.ProgressRings, started);
         }
 
-        private static Texture2D RingTexture(float fraction)
+        // One GUI unit, measured in screen pixels, including the window scale. The ring is
+        // rasterized at exactly that many pixels, so nothing scales the bitmap afterwards.
+        private static Rect RingRect(Vector2 guiPosition)
+        {
+            Vector2 origin = GUIUtility.GUIToScreenPoint(Vector2.zero);
+            Vector2 unit = GUIUtility.GUIToScreenPoint(Vector2.right) - origin;
+            float screenPerGui = unit.magnitude;
+            if (screenPerGui < 0.01f)
+            {
+                screenPerGui = 1f;
+            }
+
+            int pixels = Mathf.RoundToInt(RingSize * screenPerGui);
+            if (pixels < 16)
+            {
+                pixels = 16;
+            }
+            else if (pixels > 512)
+            {
+                pixels = 512;
+            }
+
+            if (pixels != ringPixels)
+            {
+                for (int i = 0; i < rings.Length; i++)
+                {
+                    if (rings[i] != null)
+                    {
+                        UnityEngine.Object.Destroy(rings[i]);
+                        rings[i] = null;
+                    }
+                }
+
+                ringPixels = pixels;
+            }
+
+            Vector2 screen = GUIUtility.GUIToScreenPoint(guiPosition);
+            var snapped = new Vector2(Mathf.Round(screen.x), Mathf.Round(screen.y));
+            Vector2 aligned = GUIUtility.ScreenToGUIPoint(snapped);
+            float guiSize = pixels / screenPerGui;
+            return new Rect(aligned.x, aligned.y, guiSize, guiSize);
+        }
+
+        private static Texture2D RingTexture(float fraction, int size)
         {
             int step = (int)(fraction * 50f + 0.5f);
             if (step < 0)
@@ -169,48 +215,93 @@ namespace ROR_O
                 step = 50;
             }
 
-            Texture2D? cached = Rings[step];
+            Texture2D? cached = rings[step];
             if (cached != null)
             {
                 return cached;
             }
 
-            const int size = 32;
+            // Point sampling: each texel is one screen pixel. Bilinear would blur the coverage
+            // that the samples below already computed, which is the grayscale edge a font draws.
             var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
             {
                 hideFlags = HideFlags.HideAndDontSave,
                 wrapMode = TextureWrapMode.Clamp,
-                filterMode = FilterMode.Bilinear
+                filterMode = FilterMode.Point
             };
             var pixels = new Color32[size * size];
             float limit = step / 50f * Mathf.PI * 2f;
-            var track = new Color32(255, 255, 255, 56);
-            var fill = new Color32(140, 220, 255, 235);
+            float center = size * 0.5f;
+            // Stroke widths snap to whole pixels, the way a hinter snaps a stem to the pixel grid.
+            int outer = Mathf.RoundToInt(size * (14.5f / 32f));
+            int stroke = Mathf.RoundToInt(size * (6f / 32f));
+            if (stroke < 2)
+            {
+                stroke = 2;
+            }
+
+            int inner = outer - stroke;
+            if (inner < 1)
+            {
+                inner = 1;
+            }
+
+            float outerSqr = outer * outer;
+            float innerSqr = inner * inner;
+            var track = new Color(1f, 1f, 1f, 56f / 255f);
+            var fill = new Color(140f / 255f, 220f / 255f, 1f, 235f / 255f);
+            const int samples = 4;
+            float sampleStep = 1f / samples;
             for (int y = 0; y < size; y++)
             {
                 for (int x = 0; x < size; x++)
                 {
-                    float dx = x - 15.5f;
-                    float dy = y - 15.5f;
-                    float distance = Mathf.Sqrt(dx * dx + dy * dy);
-                    if (distance < 8.5f || distance > 14.5f)
+                    int fillCount = 0;
+                    int trackCount = 0;
+                    for (int sy = 0; sy < samples; sy++)
+                    {
+                        for (int sx = 0; sx < samples; sx++)
+                        {
+                            float dx = x + (sx + 0.5f) * sampleStep - center;
+                            float dy = y + (sy + 0.5f) * sampleStep - center;
+                            float distanceSqr = dx * dx + dy * dy;
+                            if (distanceSqr > outerSqr || distanceSqr < innerSqr)
+                            {
+                                continue;
+                            }
+
+                            float angle = Mathf.Atan2(dx, dy);
+                            if (angle < 0f)
+                            {
+                                angle += Mathf.PI * 2f;
+                            }
+
+                            if (angle <= limit)
+                            {
+                                fillCount++;
+                            }
+                            else
+                            {
+                                trackCount++;
+                            }
+                        }
+                    }
+
+                    int covered = fillCount + trackCount;
+                    if (covered == 0)
                     {
                         continue;
                     }
 
-                    float angle = Mathf.Atan2(dx, dy);
-                    if (angle < 0f)
-                    {
-                        angle += Mathf.PI * 2f;
-                    }
-
-                    pixels[y * size + x] = angle <= limit ? fill : track;
+                    Color color = ((fill * fillCount) + (track * trackCount)) / covered;
+                    color.a *= covered / (float)(samples * samples);
+                    pixels[y * size + x] = color;
                 }
             }
 
             texture.SetPixels32(pixels);
             texture.Apply(false, true);
-            Rings[step] = texture;
+            rings[step] = texture;
             return texture;
         }
 
