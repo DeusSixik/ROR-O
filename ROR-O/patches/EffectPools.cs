@@ -21,6 +21,29 @@ namespace ROR_O
         private static readonly MethodInfo? CloneMethod = AccessTools.Method(typeof(EffectData), nameof(EffectData.Clone));
         private static readonly Dictionary<string, uint> SoundIds = new Dictionary<string, uint>(128);
         private static readonly ConditionalWeakTable<EffectManagerHelper, ParkedCopy> Parked = new ConditionalWeakTable<EffectManagerHelper, ParkedCopy>();
+        private static readonly Dictionary<GameObject, int> SpawnCounts = new Dictionary<GameObject, int>();
+        private static int activeParked;
+
+        // A copy parked active keeps every script on it ticking, so only effects that spawn
+        // often earn it, and only up to a global cap. The rest deactivate as the game does.
+        private const int HotSpawnThreshold = 12;
+
+        internal static void NotePrefabSpawn(GameObject? prefab)
+        {
+            if (prefab == null)
+            {
+                return;
+            }
+
+            SpawnCounts.TryGetValue(prefab, out int count);
+            SpawnCounts[prefab] = count + 1;
+        }
+
+        internal static void ResetParkedActive()
+        {
+            activeParked = 0;
+            SpawnCounts.Clear();
+        }
         private static readonly FieldInfo? TrailField = AccessTools.Field(typeof(EffectManagerHelper), "_TrailRenderers");
         private static readonly FieldInfo? VfxField = AccessTools.Field(typeof(EffectManagerHelper), "_vfxAttributes");
         private static readonly FieldInfo? PoolCapacityField = AccessTools.Field(typeof(EffectPool), "poolCapacity");
@@ -153,8 +176,13 @@ namespace ROR_O
             }
         }
 
-        internal static int CheckoutCount(GameObject prefab)
+        internal static int CheckoutCount(GameObject? prefab)
         {
+            if (prefab == null)
+            {
+                return 0;
+            }
+
             Dictionary<GameObject, EffectPool>? map = PoolMap();
             if (map == null || !map.TryGetValue(prefab, out EffectPool? pool))
             {
@@ -507,6 +535,15 @@ namespace ROR_O
                 return true;
             }
 
+            // Keeping every idle copy active taxed every frame for a saving that only
+            // frequent spawns repay. Cold effects and a full cap fall back to deactivation.
+            GameObject? prefab = __instance.PrefabObject;
+            if (!prefab || activeParked >= EffectRuntime.ActiveParkLimit
+                || !SpawnCounts.TryGetValue(prefab, out int spawns) || spawns < HotSpawnThreshold)
+            {
+                return true;
+            }
+
             if (!inReturnObject.EffectComplete())
             {
                 if (OrphanField?.GetValue(__instance) is List<EffectManagerHelper> orphans)
@@ -532,6 +569,14 @@ namespace ROR_O
                 RORO.GlobalLogger?.LogWarning($"Active effect pool could not park {inReturnObject.name}; it was deactivated.");
                 inReturnObject.gameObject.SetActive(false);
                 PushIdle(__instance, inReturnObject);
+                return false;
+            }
+
+            if (inReturnObject.gameObject.activeSelf
+                && Parked.TryGetValue(inReturnObject, out ParkedCopy? parked) && parked != null && parked.Hidden)
+            {
+                activeParked++;
+                parked.Counted = true;
             }
 
             return false;
@@ -597,6 +642,7 @@ namespace ROR_O
 
             helper.StopAllParticleSystems(true);
             HideRenderers(helper);
+            HideLights(helper);
             ClearTrails(helper);
             if (copy.transform.parent != null)
             {
@@ -612,7 +658,9 @@ namespace ROR_O
 
         internal static void WakeParkedCopy(EffectManagerHelper __result)
         {
-            if (!EffectRuntime.KeepCopiesActive || !__result || !__result.gameObject.activeSelf)
+            // Runs even when the toggle was switched off after this copy parked: a copy
+            // checked out hidden must get its renderers and lights back either way.
+            if (!__result || !__result.gameObject.activeSelf)
             {
                 return;
             }
@@ -634,21 +682,69 @@ namespace ROR_O
                 }
             }
 
+            Light[] lights = parked.Lights;
+            bool[] lightWasEnabled = parked.LightWasEnabled;
+            int lightCount = lights.Length < lightWasEnabled.Length ? lights.Length : lightWasEnabled.Length;
+            for (int i = 0; i < lightCount; i++)
+            {
+                Light light = lights[i];
+                if (light)
+                {
+                    light.enabled = lightWasEnabled[i];
+                }
+            }
+
             parked.Hidden = false;
+            if (parked.Counted)
+            {
+                parked.Counted = false;
+                if (activeParked > 0)
+                {
+                    activeParked--;
+                }
+            }
+
             if (VfxField?.GetValue(__result) is VFXAttributes attributes && !attributes.enabled)
             {
                 attributes.enabled = true;
             }
         }
 
+        private static ParkedCopy ParkedFor(EffectManagerHelper helper)
+        {
+            if (Parked.TryGetValue(helper, out ParkedCopy? parked) && parked != null)
+            {
+                return parked;
+            }
+
+            parked = new ParkedCopy(
+                helper.GetComponentsInChildren<Renderer>(true),
+                helper.GetComponentsInChildren<Light>(true));
+            Parked.Add(helper, parked);
+            return parked;
+        }
+
+        private static void HideLights(EffectManagerHelper helper)
+        {
+            ParkedCopy parked = ParkedFor(helper);
+            Light[] lights = parked.Lights;
+            for (int i = 0; i < lights.Length; i++)
+            {
+                Light light = lights[i];
+                if (!light)
+                {
+                    parked.LightWasEnabled[i] = false;
+                    continue;
+                }
+
+                parked.LightWasEnabled[i] = light.enabled;
+                light.enabled = false;
+            }
+        }
+
         private static void HideRenderers(EffectManagerHelper helper)
         {
-            if (!Parked.TryGetValue(helper, out ParkedCopy? parked) || parked == null)
-            {
-                Renderer[] found = helper.GetComponentsInChildren<Renderer>(true);
-                parked = new ParkedCopy(found);
-                Parked.Add(helper, parked);
-            }
+            ParkedCopy parked = ParkedFor(helper);
 
             if (parked.Hidden)
             {
@@ -693,12 +789,17 @@ namespace ROR_O
         {
             internal readonly Renderer[] Renderers;
             internal readonly bool[] WasEnabled;
+            internal readonly Light[] Lights;
+            internal readonly bool[] LightWasEnabled;
             internal bool Hidden;
+            internal bool Counted;
 
-            internal ParkedCopy(Renderer[] renderers)
+            internal ParkedCopy(Renderer[] renderers, Light[] lights)
             {
                 Renderers = renderers;
                 WasEnabled = new bool[renderers.Length];
+                Lights = lights;
+                LightWasEnabled = new bool[lights.Length];
             }
         }
 

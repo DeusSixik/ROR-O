@@ -53,6 +53,9 @@ namespace ROR_O
         public ConfigEntry<bool>? EnableEffectWarmup { get; set; }
         public ConfigEntry<bool>? KeepEffectPools { get; set; }
         public ConfigEntry<bool>? KeepEffectCopiesActive { get; set; }
+        public ConfigEntry<int>? ActiveParkLimit { get; set; }
+        public ConfigEntry<bool>? WarmFullPeak { get; set; }
+        public ConfigEntry<bool>? WarmShaders { get; set; }
         public ConfigEntry<int>? WarmPeakCopies { get; set; }
         // public ConfigEntry<bool>? WarmAllEffectCopies { get; set; }
         public ConfigEntry<int>? EffectLoadsPerFrame { get; set; }
@@ -193,7 +196,10 @@ namespace ROR_O
             menu.CheckBox(catalog.EnableEffectWarmup);
             menu.CheckBox(catalog.KeepEffectPools);
             menu.CheckBox(catalog.KeepEffectCopiesActive, null, "<color=#FFDD44>[Experimental]</color> Keep Effect Copies Active");
-            menu.IntSlider(catalog.WarmPeakCopies, 0, 8, effectWarmupOff);
+            menu.IntSlider(catalog.ActiveParkLimit, 0, 512, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Active Parked Copies");
+            menu.CheckBox(catalog.WarmFullPeak, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm Full Observed Peak");
+            menu.CheckBox(catalog.WarmShaders, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm Effect Shaders");
+            menu.IntSlider(catalog.WarmPeakCopies, 0, 20, effectWarmupOff);
             // menu.CheckBox(catalog.WarmAllEffectCopies, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm All Effect Copies");
             menu.IntSlider(catalog.EffectLoadsPerFrame, 1, 8, effectWarmupOff);
             menu.IntSlider(catalog.EffectWarmsPerFrame, 1, 2, effectWarmupOff);
@@ -308,7 +314,7 @@ namespace ROR_O
                 Add("RiskOfOptions.Options.CheckBoxOption", entry, config);
             }
 
-            public void IntSlider(ConfigEntry<int>? entry, int min, int max, Func<bool>? disabledWhen = null)
+            public void IntSlider(ConfigEntry<int>? entry, int min, int max, Func<bool>? disabledWhen = null, string? displayName = null)
             {
                 if (entry == null)
                 {
@@ -318,6 +324,11 @@ namespace ROR_O
                 object config = CreateConfig("RiskOfOptions.OptionConfigs.IntSliderConfig", entry, disabledWhen);
                 Set(config, "min", min);
                 Set(config, "max", max);
+                if (displayName != null)
+                {
+                    Set(config, "name", displayName);
+                }
+
                 Add("RiskOfOptions.Options.IntSliderOption", entry, config);
             }
 

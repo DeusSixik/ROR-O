@@ -35,6 +35,9 @@ namespace ROR_O
         private static ConfigEntry<bool>? warmEffects;
         private static ConfigEntry<bool>? keepPools;
         private static ConfigEntry<bool>? keepCopiesActive;
+        private static ConfigEntry<int>? activeParkLimit;
+        private static ConfigEntry<bool>? warmFullPeak;
+        private static ConfigEntry<bool>? warmShaders;
         private static ConfigEntry<int>? warmPeakCopies;
         private static ConfigEntry<int>? loadsPerFrame;
         private static ConfigEntry<int>? warmsPerFrame;
@@ -64,6 +67,12 @@ namespace ROR_O
         private static int pinCursor;
         private static int warmedPrefabs;
         private static int instancesBuilt;
+        private static int shaderCursor;
+        private static int shaderVariants;
+        private static readonly HashSet<string> shaderVariantKeys = new HashSet<string>();
+        private static readonly List<ShaderVariantCollection> shaderCollections = new List<ShaderVariantCollection>();
+        private static ShaderVariantCollection? shaderBatch;
+        private static int shaderBatchCount;
         private static int culledEffects;
         private static int frame;
         private static float lastWarmTime;
@@ -73,6 +82,7 @@ namespace ROR_O
         private static Camera? gameplayCamera;
         private static bool cullWasEnabled;
         private static Run? observedRun;
+        private static float lastStatusRefresh;
         private static string statusText = "Effect status is not ready yet.";
         private static GUIStyle? statusStyle;
 
@@ -80,6 +90,9 @@ namespace ROR_O
         internal static ConfigEntry<bool>? WarmEffects => warmEffects;
         internal static ConfigEntry<bool>? KeepPoolsEntry => keepPools;
         internal static ConfigEntry<bool>? KeepCopiesActiveEntry => keepCopiesActive;
+        internal static ConfigEntry<int>? ActiveParkLimitEntry => activeParkLimit;
+        internal static ConfigEntry<bool>? WarmFullPeakEntry => warmFullPeak;
+        internal static ConfigEntry<bool>? WarmShadersEntry => warmShaders;
         internal static ConfigEntry<int>? WarmPeakCopiesEntry => warmPeakCopies;
         internal static ConfigEntry<int>? LoadsPerFrameEntry => loadsPerFrame;
         internal static ConfigEntry<int>? WarmsPerFrameEntry => warmsPerFrame;
@@ -92,6 +105,7 @@ namespace ROR_O
 
         internal static bool KeepPools => keepPools?.Value ?? true;
         internal static bool KeepCopiesActive => keepCopiesActive?.Value == true;
+        internal static int ActiveParkLimit => activeParkLimit != null ? Clamp(activeParkLimit.Value, 0, 512) : 96;
 
         internal static void Bind(ConfigFile config)
         {
@@ -113,7 +127,25 @@ namespace ROR_O
                 section,
                 "Keep Effect Copies Active",
                 false,
-                "<color=#FFDD44>[Experimental]</color> Parked pool copies stay active instead of being deactivated. The next spawn skips SetActive. Particles are stopped, renderers are hidden, and the copy leaves the live effect list the same way a deactivate would. A script on the prefab that keeps ticking while it is parked still runs.");
+                "<color=#FFDD44>[Experimental]</color> Copies of frequently spawned effects stay active while parked instead of being deactivated, up to the Active Parked Copies cap. The next spawn skips SetActive. Particles are stopped, renderers and lights are hidden, and the copy leaves the live effect list the same way a deactivate would. A script on the prefab that keeps ticking while it is parked still runs, which is why only hot effects under the cap stay active.");
+
+            activeParkLimit = config.Bind(
+                section,
+                "Active Parked Copies",
+                96,
+                "<color=#FFDD44>[Experimental]</color> Most pool copies that may stay active while parked at once. Every active parked copy still ticks its scripts, so this cap is what keeps the saving on hot effects from taxing every frame.");
+
+            warmFullPeak = config.Bind(
+                section,
+                "Warm Full Observed Peak",
+                false,
+                "<color=#FFDD44>[Experimental]</color> Builds pool copies up to the largest concurrency an effect actually reached this run (at most the game's pool capacity of 20), ignoring Warm Peak Copies. More copies held ready means more memory and more inactive objects per stage.");
+
+            warmShaders = config.Bind(
+                section,
+                "Warm Effect Shaders",
+                false,
+                "<color=#FFDD44>[Experimental]</color> During the loading screen, collects the shader variants of effect prefab materials and compiles them in batches, so the first spawn of an effect does not pay shader compilation. Variants are guessed from material keywords and may miss combinations the game uses.");
 
             warmPeakCopies = config.Bind(
                 section,
@@ -181,6 +213,9 @@ namespace ROR_O
             SettingsProfiles.Add(warmEffects, true, true, true);
             SettingsProfiles.Add(keepPools, true, true, true);
             SettingsProfiles.Add(keepCopiesActive, false, false, false);
+            SettingsProfiles.Add(activeParkLimit, 96, 96, 96);
+            SettingsProfiles.Add(warmFullPeak, false, false, false);
+            SettingsProfiles.Add(warmShaders, false, false, false);
             SettingsProfiles.Add(warmPeakCopies, 2, 4, 6);
             // SettingsProfiles.Add(warmAllCopies, false, false, false);
             SettingsProfiles.Add(loadsPerFrame, 2, 4, 4);
@@ -270,6 +305,7 @@ namespace ROR_O
                 prefabs[index] = prefab;
             }
 
+            EffectPools.NotePrefabSpawn(prefab);
             int inUse = EffectPools.CheckoutCount(prefab);
             if (inUse <= peakInUse[index])
             {
@@ -313,6 +349,7 @@ namespace ROR_O
             // Scene unload already destroyed the pool copies. Pins stay valid across a stage change
             // because they are held until the run ends, and the peaks stay valid for the same run,
             // so the copies this run needs are queued to be built again on the new stage.
+            EffectPools.ResetParkedActive();
             pinCursor = 0;
             warmedPrefabs = 0;
             instancesBuilt = 0;
@@ -393,6 +430,11 @@ namespace ROR_O
             LoadingProgress.Set("Effect prefabs", pinCursor, count, pinCursor < count);
             if (loading)
             {
+                if (warmShaders?.Value == true)
+                {
+                    WarmShaderStep(count);
+                }
+
                 return;
             }
 
@@ -582,8 +624,11 @@ namespace ROR_O
                 return;
             }
 
-            if ((Time.frameCount & 15) == 0)
+            // OnGUI fires several times per frame, so a frame-count gate still rebuilt the
+            // counts many times a second. The profiler put that at over a millisecond a call.
+            if (Time.unscaledTime - lastStatusRefresh >= 0.5f)
             {
+                lastStatusRefresh = Time.unscaledTime;
                 RefreshStatus();
             }
 
@@ -617,6 +662,7 @@ namespace ROR_O
             queued = new bool[count];
             warmQueue.Clear();
             pinCursor = 0;
+            shaderCursor = 0;
             warmedPrefabs = 0;
             instancesBuilt = 0;
             return count;
@@ -665,6 +711,121 @@ namespace ROR_O
             }
 
             settled[index] = true;
+        }
+
+        // Shader compilation is global, so unlike pool copies it survives scene activation
+        // and belongs in the loading window. Variants are guessed from each material's own
+        // keywords; a combination Unity rejects is skipped, and a missed combination just
+        // compiles at its first real spawn as it does today.
+        private static void WarmShaderStep(int count)
+        {
+            long started = Stopwatch.GetTimestamp();
+            int processed = 0;
+            while (shaderCursor < count)
+            {
+                GameObject? prefab = prefabs[shaderCursor];
+                if (!prefab)
+                {
+                    AsyncOperationHandle<GameObject> handle = handles[shaderCursor];
+                    if (!handle.IsValid())
+                    {
+                        shaderCursor++;
+                        continue;
+                    }
+
+                    if (!handle.IsDone)
+                    {
+                        break;
+                    }
+
+                    prefab = handle.Result;
+                    prefabs[shaderCursor] = prefab;
+                }
+
+                shaderCursor++;
+                processed++;
+                if (prefab)
+                {
+                    CollectShaderVariants(prefab!);
+                }
+
+                if (shaderBatchCount >= 24)
+                {
+                    FlushShaderBatch();
+                }
+
+                if (LoadingPhase.BudgetExpired(started, processed))
+                {
+                    break;
+                }
+            }
+
+            if (shaderCursor >= count)
+            {
+                FlushShaderBatch();
+            }
+
+            LoadingProgress.Set("Effect shaders", shaderCursor, count, shaderCursor < count);
+        }
+
+        private static void CollectShaderVariants(GameObject prefab)
+        {
+            Renderer[] renderers = prefab.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Material[] materials = renderers[i].sharedMaterials;
+                for (int j = 0; j < materials.Length; j++)
+                {
+                    Material? material = materials[j];
+                    if (!material || !material.shader)
+                    {
+                        continue;
+                    }
+
+                    string[] keywords = material.shaderKeywords;
+                    string key = material.shader.name + "|" + string.Join(",", keywords);
+                    if (!shaderVariantKeys.Add(key))
+                    {
+                        continue;
+                    }
+
+                    shaderBatch ??= new ShaderVariantCollection();
+                    try
+                    {
+                        shaderBatch.Add(new ShaderVariantCollection.ShaderVariant(material.shader, UnityEngine.Rendering.PassType.Normal, keywords));
+                        shaderBatchCount++;
+                        shaderVariants++;
+                    }
+                    catch (System.Exception)
+                    {
+                        // Not a combination this shader accepts. The first real spawn
+                        // compiles what it actually needs.
+                    }
+                }
+            }
+        }
+
+        private static void FlushShaderBatch()
+        {
+            if (shaderBatch == null || shaderBatchCount == 0)
+            {
+                shaderBatch = null;
+                shaderBatchCount = 0;
+                return;
+            }
+
+            try
+            {
+                shaderBatch.WarmUp();
+                shaderCollections.Add(shaderBatch);
+            }
+            catch (System.Exception exception)
+            {
+                RORO.GlobalLogger?.LogWarning($"Effect shader warmup batch failed: {exception.Message}");
+            }
+
+            shaderBatch = null;
+            shaderBatchCount = 0;
         }
 
         private static bool TryWarm(int index)
@@ -852,7 +1013,14 @@ namespace ROR_O
 
         private static int PeakCap()
         {
-            return Clamp(warmPeakCopies?.Value ?? 4, 0, 8);
+            // 20 is the game's own default pool capacity: a return past it destroys the copy,
+            // so building more than that ahead of time cannot be held anyway.
+            if (warmFullPeak?.Value == true)
+            {
+                return 20;
+            }
+
+            return Clamp(warmPeakCopies?.Value ?? 4, 0, 20);
         }
 
         private static int PeakTarget(int index)
@@ -1033,7 +1201,7 @@ namespace ROR_O
             }
 
             EffectPools.CountPools(out int pools, out int idle, out int inUse);
-            int cap = Clamp(warmPeakCopies?.Value ?? 4, 0, 8);
+            int cap = PeakCap();
 
             statusBuilder.Clear();
             statusBuilder.Append("Effects ").Append(handles.Length);
