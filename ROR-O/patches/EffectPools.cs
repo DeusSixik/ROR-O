@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using RoR2;
+using RoR2.Audio;
 using RoR2.ContentManagement;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
@@ -17,6 +19,16 @@ namespace ROR_O
         private static readonly FieldInfo? MapField = AccessTools.Field(typeof(EffectManager), "_EffectPrefabMap");
         private static readonly MethodInfo? CollectMethod = AccessTools.Method(typeof(System.GC), nameof(System.GC.Collect), System.Type.EmptyTypes);
         private static readonly MethodInfo? CloneMethod = AccessTools.Method(typeof(EffectData), nameof(EffectData.Clone));
+        private static readonly Dictionary<string, uint> SoundIds = new Dictionary<string, uint>(128);
+        private static readonly ConditionalWeakTable<EffectManagerHelper, ParkedCopy> Parked = new ConditionalWeakTable<EffectManagerHelper, ParkedCopy>();
+        private static readonly FieldInfo? TrailField = AccessTools.Field(typeof(EffectManagerHelper), "_TrailRenderers");
+        private static readonly FieldInfo? VfxField = AccessTools.Field(typeof(EffectManagerHelper), "_vfxAttributes");
+        private static readonly FieldInfo? PoolCapacityField = AccessTools.Field(typeof(EffectPool), "poolCapacity");
+        private static readonly FieldInfo? OrphanField = AccessTools.Field(typeof(EffectPool), "_OrphanedEffects");
+        private static readonly FieldInfo? InUseField = FindPoolField("_InUse");
+        private static readonly FieldInfo? IdleField = FindPoolField("_Pool");
+        private static readonly MethodInfo? TimestampSetter = FindTimestampSetter();
+        private static readonly Vector3 Park = new Vector3(0f, -5000f, 0f);
         private static readonly object[] LoadArgs = new object[2];
 
         private static MethodInfo? loadAsset;
@@ -61,6 +73,54 @@ namespace ROR_O
             if (disable != null)
             {
                 harmony.Patch(disable, postfix: new HarmonyMethod(typeof(EffectPools), nameof(OnEffectDisabled)));
+            }
+
+            MethodInfo? reset = AccessTools.Method(typeof(EffectManagerHelper), nameof(EffectManagerHelper.Reset), new[] { typeof(bool) });
+            if (reset == null)
+            {
+                RORO.GlobalLogger?.LogWarning("EffectManagerHelper.Reset was not found; particle restart still walks every child system.");
+            }
+            else
+            {
+                harmony.Patch(reset, transpiler: new HarmonyMethod(typeof(EffectPools), nameof(PlayParticlesOnce)));
+            }
+
+            MethodInfo? soundId = AccessTools.Method(typeof(AkEventIdArg), "op_Explicit", new[] { typeof(string) });
+            if (soundId == null)
+            {
+                RORO.GlobalLogger?.LogWarning("AkEventIdArg string cast was not found; effect sounds still ask Wwise for the id on every spawn.");
+            }
+            else
+            {
+                harmony.Patch(soundId, prefix: new HarmonyMethod(typeof(EffectPools), nameof(RememberSoundId)));
+            }
+
+            MethodInfo? effectReturn = AccessTools.Method(typeof(EffectPool), nameof(EffectPool.ReturnObject), new[] { typeof(EffectManagerHelper) });
+            if (effectReturn == null)
+            {
+                RORO.GlobalLogger?.LogWarning("EffectPool.ReturnObject was not found; pooled effects still deactivate.");
+            }
+            else
+            {
+                try
+                {
+                    harmony.Patch(effectReturn, prefix: new HarmonyMethod(typeof(EffectPools), nameof(ParkInsteadOfDeactivate)));
+                    RORO.GlobalLogger?.LogInfo("Pooled effects can stay active while parked.");
+                }
+                catch (Exception exception)
+                {
+                    RORO.GlobalLogger?.LogWarning($"Pooled effects still deactivate: {exception.Message}");
+                }
+            }
+
+            foreach (MethodInfo method in typeof(EffectManager).GetMethods(BindingFlags.Public | BindingFlags.Static))
+            {
+                if (method.Name != nameof(EffectManager.GetPooledEffect) || method.ReturnType != typeof(EffectManagerHelper))
+                {
+                    continue;
+                }
+
+                harmony.Patch(method, postfix: new HarmonyMethod(typeof(EffectPools), nameof(WakeParkedCopy)));
             }
         }
 
@@ -308,7 +368,346 @@ namespace ROR_O
                 RORO.GlobalLogger?.LogInfo("Effect spawn stores its data copy directly.");
             }
 
+            return UseCachedEffectComponent(list);
+        }
+
+        // GetPooledEffect already ran Initialize, which stored this copy's EffectComponent.
+        // The spawn then looks it up on the GameObject again.
+        private static List<CodeInstruction> UseCachedEffectComponent(List<CodeInstruction> list)
+        {
+            MethodInfo? componentGetter = AccessTools.PropertyGetter(typeof(EffectManagerHelper), nameof(EffectManagerHelper.effectComponent));
+            MethodInfo? gameObjectGetter = AccessTools.PropertyGetter(typeof(Component), nameof(Component.gameObject));
+            MethodInfo? getComponent = AccessTools.Method(typeof(GameObject), nameof(GameObject.GetComponent), Type.EmptyTypes, new[] { typeof(EffectComponent) });
+            if (componentGetter == null || gameObjectGetter == null || getComponent == null)
+            {
+                RORO.GlobalLogger?.LogWarning("Effect spawn still looks up EffectComponent on every copy.");
+                return list;
+            }
+
+            int replaced = 0;
+            for (int i = 0; i < list.Count - 1; i++)
+            {
+                if (!list[i].Calls(gameObjectGetter) || !list[i + 1].Calls(getComponent))
+                {
+                    continue;
+                }
+
+                list[i].operand = componentGetter;
+                CodeInstruction removed = list[i + 1];
+                list.RemoveAt(i + 1);
+                if (i + 1 < list.Count)
+                {
+                    list[i + 1].MoveLabelsFrom(removed);
+                    list[i + 1].MoveBlocksFrom(removed);
+                }
+
+                replaced++;
+                break;
+            }
+
+            if (replaced != 1)
+            {
+                RORO.GlobalLogger?.LogWarning($"Effect spawn still looks up EffectComponent on every copy (replaced {replaced}, expected 1).");
+            }
+            else
+            {
+                RORO.GlobalLogger?.LogInfo("Effect spawn uses the pool copy's cached EffectComponent.");
+            }
+
             return list;
+        }
+
+        // Reset already visits every particle system on the copy. Stop(), Clear(), and Play()
+        // with no arguments also walk that system's children, so each child is restarted once
+        // for itself and again for every ancestor. The explicit calls cover the same set.
+        private static IEnumerable<CodeInstruction> PlayParticlesOnce(IEnumerable<CodeInstruction> instructions)
+        {
+            MethodInfo? stopBare = AccessTools.Method(typeof(ParticleSystem), nameof(ParticleSystem.Stop), Type.EmptyTypes);
+            MethodInfo? clearBare = AccessTools.Method(typeof(ParticleSystem), nameof(ParticleSystem.Clear), Type.EmptyTypes);
+            MethodInfo? playBare = AccessTools.Method(typeof(ParticleSystem), nameof(ParticleSystem.Play), Type.EmptyTypes);
+            MethodInfo? stop = AccessTools.Method(typeof(ParticleSystem), nameof(ParticleSystem.Stop), new[] { typeof(bool), typeof(ParticleSystemStopBehavior) });
+            MethodInfo? clear = AccessTools.Method(typeof(ParticleSystem), nameof(ParticleSystem.Clear), new[] { typeof(bool) });
+            MethodInfo? play = AccessTools.Method(typeof(ParticleSystem), nameof(ParticleSystem.Play), new[] { typeof(bool) });
+            if (stopBare == null || clearBare == null || playBare == null || stop == null || clear == null || play == null)
+            {
+                RORO.GlobalLogger?.LogWarning("Effect restart still walks child particle systems for every system.");
+                return instructions;
+            }
+
+            int stops = 0;
+            int clears = 0;
+            int plays = 0;
+            var output = new List<CodeInstruction>();
+            foreach (CodeInstruction instruction in instructions)
+            {
+                if (instruction.Calls(stopBare))
+                {
+                    output.Add(ShiftArguments(instruction));
+                    output.Add(new CodeInstruction(OpCodes.Ldc_I4_0));
+                    instruction.operand = stop;
+                    stops++;
+                }
+                else if (instruction.Calls(clearBare))
+                {
+                    output.Add(ShiftArguments(instruction));
+                    instruction.operand = clear;
+                    clears++;
+                }
+                else if (instruction.Calls(playBare))
+                {
+                    output.Add(ShiftArguments(instruction));
+                    instruction.operand = play;
+                    plays++;
+                }
+
+                output.Add(instruction);
+            }
+
+            if (stops != 1 || clears != 1 || plays != 1)
+            {
+                RORO.GlobalLogger?.LogWarning($"Effect restart still walks child particle systems (stop {stops}, clear {clears}, play {plays}; expected 1 each).");
+            }
+            else
+            {
+                RORO.GlobalLogger?.LogInfo("Effect restart plays each particle system once.");
+            }
+
+            return output;
+        }
+
+        // Wwise resolves a name to a stable id. SpawnEffect casts the effect sound and the surface
+        // sound on every copy, and each cast marshals the string into the native sound engine.
+        private static bool RememberSoundId(string eventName, ref AkEventIdArg __result)
+        {
+            if (eventName == null)
+            {
+                __result = 0u;
+                return false;
+            }
+
+            if (!SoundIds.TryGetValue(eventName, out uint id))
+            {
+                id = AkSoundEngine.GetIDFromString(eventName);
+                SoundIds.Add(eventName, id);
+            }
+
+            __result = id;
+            return false;
+        }
+
+        // The pool deactivates a returned copy, and the next spawn activates it again. That pair
+        // walks the whole hierarchy. Patching PrefabComponentPool<T>.ReturnObject fails: Harmony
+        // cannot rebuild a method that still has an open generic argument. EffectPool.ReturnObject
+        // is a normal method, so the active-copy path lives here and pushes onto the idle stack
+        // itself instead of calling the deactivate.
+        private static bool ParkInsteadOfDeactivate(EffectPool __instance, EffectManagerHelper inReturnObject)
+        {
+            if (!EffectRuntime.KeepCopiesActive || !inReturnObject)
+            {
+                return true;
+            }
+
+            if (!inReturnObject.EffectComplete())
+            {
+                if (OrphanField?.GetValue(__instance) is List<EffectManagerHelper> orphans)
+                {
+                    orphans.Add(inReturnObject);
+                }
+
+                return false;
+            }
+
+            inReturnObject.OnReturnToPool();
+            int capacity = PoolCapacityField != null ? (int)PoolCapacityField.GetValue(__instance) : 20;
+            EffectPool? owning = inReturnObject.OwningPool;
+            if (owning != null && owning.PoolCount() >= capacity)
+            {
+                UnityEngine.Object.Destroy(inReturnObject.gameObject);
+                return false;
+            }
+
+            ParkActiveCopy(inReturnObject);
+            if (!PushIdle(__instance, inReturnObject))
+            {
+                RORO.GlobalLogger?.LogWarning($"Active effect pool could not park {inReturnObject.name}; it was deactivated.");
+                inReturnObject.gameObject.SetActive(false);
+                PushIdle(__instance, inReturnObject);
+            }
+
+            return false;
+        }
+
+        private static bool PushIdle(EffectPool pool, EffectManagerHelper helper)
+        {
+            object? inUseValue = InUseField?.GetValue(pool);
+            object? idleValue = IdleField?.GetValue(pool);
+            if (!(inUseValue is List<EffectManagerHelper> inUse) || !(idleValue is Stack<EffectManagerHelper> idle))
+            {
+                return false;
+            }
+
+            if (!inUse.Contains(helper))
+            {
+                if (!idle.Contains(helper))
+                {
+                    UnityEngine.Object.Destroy(helper.gameObject);
+                }
+
+                return true;
+            }
+
+            idle.Push(helper);
+            inUse.Remove(helper);
+            TimestampSetter?.Invoke(pool, new object[] { Time.realtimeSinceStartup });
+            return true;
+        }
+
+        private static FieldInfo? FindPoolField(string name)
+        {
+            Type? open = AccessTools.TypeByName("Grumpy.GenericPool`1");
+            if (open == null)
+            {
+                return null;
+            }
+
+            return AccessTools.Field(open.MakeGenericType(typeof(EffectManagerHelper)), name);
+        }
+
+        private static MethodInfo? FindTimestampSetter()
+        {
+            Type? open = AccessTools.TypeByName("Grumpy.GenericPool`1");
+            if (open == null)
+            {
+                return null;
+            }
+
+            return AccessTools.PropertySetter(open.MakeGenericType(typeof(EffectManagerHelper)), "timestamp");
+        }
+
+        private static void ParkActiveCopy(EffectManagerHelper helper)
+        {
+            GameObject copy = helper.gameObject;
+            // A copy created inactive has not run Start. Turning it on here runs Start
+            // before SpawnEffect has assigned effect data. Leave it inactive; the real
+            // spawn activates it after the data is in place.
+            if (!copy.activeSelf)
+            {
+                return;
+            }
+
+            helper.StopAllParticleSystems(true);
+            HideRenderers(helper);
+            ClearTrails(helper);
+            if (copy.transform.parent != null)
+            {
+                copy.transform.SetParent(null, true);
+            }
+
+            copy.transform.position = Park;
+            if (VfxField?.GetValue(helper) is VFXAttributes attributes && attributes.enabled)
+            {
+                attributes.enabled = false;
+            }
+        }
+
+        internal static void WakeParkedCopy(EffectManagerHelper __result)
+        {
+            if (!EffectRuntime.KeepCopiesActive || !__result || !__result.gameObject.activeSelf)
+            {
+                return;
+            }
+
+            if (!Parked.TryGetValue(__result, out ParkedCopy? parked) || parked == null || !parked.Hidden)
+            {
+                return;
+            }
+
+            Renderer[] renderers = parked.Renderers;
+            bool[] wasEnabled = parked.WasEnabled;
+            int count = renderers.Length < wasEnabled.Length ? renderers.Length : wasEnabled.Length;
+            for (int i = 0; i < count; i++)
+            {
+                Renderer renderer = renderers[i];
+                if (renderer)
+                {
+                    renderer.enabled = wasEnabled[i];
+                }
+            }
+
+            parked.Hidden = false;
+            if (VfxField?.GetValue(__result) is VFXAttributes attributes && !attributes.enabled)
+            {
+                attributes.enabled = true;
+            }
+        }
+
+        private static void HideRenderers(EffectManagerHelper helper)
+        {
+            if (!Parked.TryGetValue(helper, out ParkedCopy? parked) || parked == null)
+            {
+                Renderer[] found = helper.GetComponentsInChildren<Renderer>(true);
+                parked = new ParkedCopy(found);
+                Parked.Add(helper, parked);
+            }
+
+            if (parked.Hidden)
+            {
+                return;
+            }
+
+            Renderer[] renderers = parked.Renderers;
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer renderer = renderers[i];
+                if (!renderer)
+                {
+                    parked.WasEnabled[i] = false;
+                    continue;
+                }
+
+                parked.WasEnabled[i] = renderer.enabled;
+                renderer.enabled = false;
+            }
+
+            parked.Hidden = true;
+        }
+
+        private static void ClearTrails(EffectManagerHelper helper)
+        {
+            if (!(TrailField?.GetValue(helper) is List<TrailRenderer> trails))
+            {
+                return;
+            }
+
+            for (int i = 0; i < trails.Count; i++)
+            {
+                TrailRenderer trail = trails[i];
+                if (trail)
+                {
+                    trail.Clear();
+                }
+            }
+        }
+
+        private sealed class ParkedCopy
+        {
+            internal readonly Renderer[] Renderers;
+            internal readonly bool[] WasEnabled;
+            internal bool Hidden;
+
+            internal ParkedCopy(Renderer[] renderers)
+            {
+                Renderers = renderers;
+                WasEnabled = new bool[renderers.Length];
+            }
+        }
+
+        private static CodeInstruction ShiftArguments(CodeInstruction call)
+        {
+            CodeInstruction argument = new CodeInstruction(OpCodes.Ldc_I4_0);
+            argument.MoveLabelsFrom(call);
+            argument.MoveBlocksFrom(call);
+            return argument;
         }
     }
 }

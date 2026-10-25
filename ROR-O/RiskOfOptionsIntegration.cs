@@ -52,8 +52,9 @@ namespace ROR_O
         public ConfigEntry<SettingsProfiles.Profile>? EffectsProfile { get; set; }
         public ConfigEntry<bool>? EnableEffectWarmup { get; set; }
         public ConfigEntry<bool>? KeepEffectPools { get; set; }
+        public ConfigEntry<bool>? KeepEffectCopiesActive { get; set; }
         public ConfigEntry<int>? WarmPeakCopies { get; set; }
-        public ConfigEntry<bool>? WarmAllEffectCopies { get; set; }
+        // public ConfigEntry<bool>? WarmAllEffectCopies { get; set; }
         public ConfigEntry<int>? EffectLoadsPerFrame { get; set; }
         public ConfigEntry<int>? EffectWarmsPerFrame { get; set; }
         public ConfigEntry<bool>? CullSecondaryEffects { get; set; }
@@ -191,8 +192,9 @@ namespace ROR_O
             Func<bool> effectWarmupOff = () => catalog.EnableEffectWarmup?.Value != true;
             menu.CheckBox(catalog.EnableEffectWarmup);
             menu.CheckBox(catalog.KeepEffectPools);
+            menu.CheckBox(catalog.KeepEffectCopiesActive, null, "<color=#FFDD44>[Experimental]</color> Keep Effect Copies Active");
             menu.IntSlider(catalog.WarmPeakCopies, 0, 8, effectWarmupOff);
-            menu.CheckBox(catalog.WarmAllEffectCopies, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm All Effect Copies");
+            // menu.CheckBox(catalog.WarmAllEffectCopies, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm All Effect Copies");
             menu.IntSlider(catalog.EffectLoadsPerFrame, 1, 8, effectWarmupOff);
             menu.IntSlider(catalog.EffectWarmsPerFrame, 1, 2, effectWarmupOff);
             Func<bool> effectCullOff = () => catalog.CullSecondaryEffects?.Value != true;

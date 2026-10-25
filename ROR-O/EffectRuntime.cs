@@ -34,8 +34,8 @@ namespace ROR_O
 
         private static ConfigEntry<bool>? warmEffects;
         private static ConfigEntry<bool>? keepPools;
+        private static ConfigEntry<bool>? keepCopiesActive;
         private static ConfigEntry<int>? warmPeakCopies;
-        private static ConfigEntry<bool>? warmAllCopies;
         private static ConfigEntry<int>? loadsPerFrame;
         private static ConfigEntry<int>? warmsPerFrame;
         private static ConfigEntry<bool>? cullSecondary;
@@ -73,15 +73,14 @@ namespace ROR_O
         private static Camera? gameplayCamera;
         private static bool cullWasEnabled;
         private static Run? observedRun;
-        private static bool allCopiesQueued;
         private static string statusText = "Effect status is not ready yet.";
         private static GUIStyle? statusStyle;
 
         internal static ConfigEntry<SettingsProfiles.Profile>? Profile { get; private set; }
         internal static ConfigEntry<bool>? WarmEffects => warmEffects;
         internal static ConfigEntry<bool>? KeepPoolsEntry => keepPools;
+        internal static ConfigEntry<bool>? KeepCopiesActiveEntry => keepCopiesActive;
         internal static ConfigEntry<int>? WarmPeakCopiesEntry => warmPeakCopies;
-        internal static ConfigEntry<bool>? WarmAllCopiesEntry => warmAllCopies;
         internal static ConfigEntry<int>? LoadsPerFrameEntry => loadsPerFrame;
         internal static ConfigEntry<int>? WarmsPerFrameEntry => warmsPerFrame;
         internal static ConfigEntry<bool>? CullSecondary => cullSecondary;
@@ -92,6 +91,7 @@ namespace ROR_O
         internal static ConfigEntry<bool>? LogStatusEntry => logStatus;
 
         internal static bool KeepPools => keepPools?.Value ?? true;
+        internal static bool KeepCopiesActive => keepCopiesActive?.Value == true;
 
         internal static void Bind(ConfigFile config)
         {
@@ -109,17 +109,25 @@ namespace ROR_O
                 true,
                 "Keeps idle effect copies until the stage unloads. The game otherwise destroys a pool 45 seconds after its last use, and the next spawn instantiates a new copy.");
 
+            keepCopiesActive = config.Bind(
+                section,
+                "Keep Effect Copies Active",
+                false,
+                "<color=#FFDD44>[Experimental]</color> Parked pool copies stay active instead of being deactivated. The next spawn skips SetActive. Particles are stopped, renderers are hidden, and the copy leaves the live effect list the same way a deactivate would. A script on the prefab that keeps ticking while it is parked still runs.");
+
             warmPeakCopies = config.Bind(
                 section,
                 "Warm Peak Copies",
                 4,
                 "Most inactive copies to build ahead of time for an effect this run actually uses, based on how many copies it has had in use at once. Zero only pins the prefabs.");
 
-            warmAllCopies = config.Bind(
-                section,
-                "Warm All Effect Copies",
-                false,
-                "<color=#FFDD44>[Experimental]</color> At the start of a stage, instantiates inactive copies of every poolable effect, up to Warm Peak Copies each, instead of only the effects this run has already used. Copies are scene objects, so this runs after the loading screen, and it can stall the opening of a stage.");
+            // Warm All Effect Copies instantiated every poolable effect at stage start, up to
+            // Warm Peak Copies each. That pass stalled the opening, so it is not bound.
+            // warmAllCopies = config.Bind(
+            //     section,
+            //     "Warm All Effect Copies",
+            //     false,
+            //     "At the start of a stage, instantiates inactive copies of every poolable effect, up to Warm Peak Copies each, instead of only the effects this run has already used. Copies are scene objects, so this runs after the loading screen, and it can stall the opening of a stage.");
 
             loadsPerFrame = config.Bind(
                 section,
@@ -172,8 +180,9 @@ namespace ROR_O
             Profile = SettingsProfiles.Begin(config, section);
             SettingsProfiles.Add(warmEffects, true, true, true);
             SettingsProfiles.Add(keepPools, true, true, true);
+            SettingsProfiles.Add(keepCopiesActive, false, false, false);
             SettingsProfiles.Add(warmPeakCopies, 2, 4, 6);
-            SettingsProfiles.Add(warmAllCopies, false, false, false);
+            // SettingsProfiles.Add(warmAllCopies, false, false, false);
             SettingsProfiles.Add(loadsPerFrame, 2, 4, 4);
             SettingsProfiles.Add(warmsPerFrame, 1, 1, 1);
             SettingsProfiles.Add(cullSecondary, false, true, true);
@@ -314,7 +323,6 @@ namespace ROR_O
             System.Array.Clear(prefabs, 0, prefabs.Length);
             warmQueue.Clear();
             System.Array.Clear(queued, 0, queued.Length);
-            allCopiesQueued = false;
             for (int i = 0; i < peakInUse.Length; i++)
             {
                 if (peakInUse[i] > 0)
@@ -401,59 +409,36 @@ namespace ROR_O
             if (observedRun != run)
             {
                 observedRun = run;
-                allCopiesQueued = false;
                 System.Array.Clear(peakInUse, 0, peakInUse.Length);
                 System.Array.Clear(warmed, 0, warmed.Length);
                 warmQueue.Clear();
                 System.Array.Clear(queued, 0, queued.Length);
             }
 
-            bool warmAll = warmAllCopies?.Value == true && PeakCap() > 0;
-            if (warmAll && !allCopiesQueued)
-            {
-                for (int i = 0; i < count; i++)
-                {
-                    EnqueueWarm(i);
-                }
-
-                allCopiesQueued = true;
-            }
-
-            if (!warmAll)
-            {
-                allCopiesQueued = false;
-            }
-
             int waiting = warmQueue.Count;
             if (waiting == 0)
             {
-                PublishCopyProgress(warmAll, count, 0);
+                PublishCopyProgress(0);
                 return;
             }
 
-            // The whole-catalog pass cannot fit in the fade: activation destroys the copies.
-            // The opening of the stage is the next quiet stretch, so that pass spends the
-            // loading budget there. After it, and for the ordinary peak pass, a long frame
-            // or a recent expensive copy still waits.
+            // The first seconds of a stage are still quiet enough to rebuild copies this run
+            // has already used. Combat after that waits out a long frame and spaces warms.
             bool opening = Time.unscaledTime - sceneReadyTime < 15f;
-            bool rush = warmAll && opening;
-            if (!rush)
+            if (frameBlocked)
             {
-                if (frameBlocked)
-                {
-                    PublishCopyProgress(warmAll, count, waiting);
-                    return;
-                }
+                PublishCopyProgress(waiting);
+                return;
+            }
 
-                bool busy = CharacterBody.readOnlyInstancesList.Count > 1;
-                bool calm = frameSeconds <= CalmFrameSeconds;
-                bool throttled = Time.unscaledTime - lastWarmTime < BusyWarmIntervalSeconds;
-                bool combatWait = !opening && busy;
-                if (throttled && (combatWait || !calm))
-                {
-                    PublishCopyProgress(warmAll, count, waiting);
-                    return;
-                }
+            bool busy = CharacterBody.readOnlyInstancesList.Count > 1;
+            bool calm = frameSeconds <= CalmFrameSeconds;
+            bool throttled = Time.unscaledTime - lastWarmTime < BusyWarmIntervalSeconds;
+            bool combatWait = !opening && busy;
+            if (throttled && (combatWait || !calm))
+            {
+                PublishCopyProgress(waiting);
+                return;
             }
 
             int budget = Clamp(warmsPerFrame?.Value ?? 1, 1, 2);
@@ -463,14 +448,7 @@ namespace ROR_O
             int processed = 0;
             while (checks-- > 0 && warmQueue.Count > 0)
             {
-                if (rush)
-                {
-                    if (LoadingPhase.BudgetExpired(frameStart, processed))
-                    {
-                        break;
-                    }
-                }
-                else if (built >= budget)
+                if (built >= budget)
                 {
                     break;
                 }
@@ -501,13 +479,13 @@ namespace ROR_O
                 HitchProbes.Note(HitchProbes.Id.EffectWarm, frameStart);
             }
 
-            PublishCopyProgress(warmAll, count, warmQueue.Count);
+            PublishCopyProgress(warmQueue.Count);
         }
 
-        private static void PublishCopyProgress(bool warmAll, int catalog, int waiting)
+        private static void PublishCopyProgress(int waiting)
         {
-            int done = warmAll ? catalog - waiting : warmedPrefabs;
-            int total = warmAll ? catalog : warmedPrefabs + waiting;
+            int done = warmedPrefabs;
+            int total = warmedPrefabs + waiting;
             if (done < 0)
             {
                 done = 0;
@@ -880,11 +858,6 @@ namespace ROR_O
         private static int PeakTarget(int index)
         {
             int cap = PeakCap();
-            if (warmAllCopies?.Value == true)
-            {
-                return cap;
-            }
-
             int peak = index >= 0 && index < peakInUse.Length ? peakInUse[index] : 0;
             return peak < cap ? peak : cap;
         }
