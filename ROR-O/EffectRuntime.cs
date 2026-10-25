@@ -57,6 +57,7 @@ namespace ROR_O
         private static readonly List<EffectManagerHelper> heldHelpers = new List<EffectManagerHelper>(4);
 
         private static AsyncOperationHandle<GameObject>[] handles = System.Array.Empty<AsyncOperationHandle<GameObject>>();
+        private static bool[] directPins = System.Array.Empty<bool>();
         private static AssetReferenceT<GameObject>?[] addresses = System.Array.Empty<AssetReferenceT<GameObject>?>();
         private static GameObject?[] prefabs = System.Array.Empty<GameObject?>();
         private static byte[] warmed = System.Array.Empty<byte>();
@@ -65,6 +66,7 @@ namespace ROR_O
         private static bool[] queued = System.Array.Empty<bool>();
 
         private static int pinCursor;
+        private static bool directPinFailed;
         private static int warmedPrefabs;
         private static int instancesBuilt;
         private static int shaderCursor;
@@ -331,12 +333,15 @@ namespace ROR_O
         {
             SceneManager.sceneLoaded += OnSceneLoaded;
             SceneManager.sceneUnloaded += OnSceneUnloaded;
+            Run.onRunDestroyGlobal += OnRunDestroy;
         }
 
         private void OnDisable()
         {
             SceneManager.sceneLoaded -= OnSceneLoaded;
             SceneManager.sceneUnloaded -= OnSceneUnloaded;
+            Run.onRunDestroyGlobal -= OnRunDestroy;
+            ReleaseDirectPins();
         }
 
         private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -402,35 +407,32 @@ namespace ROR_O
                 return;
             }
 
-            // The loading window is for asset loads only. Pins are Addressables load starts,
-            // which survive scene activation, so they keep running under FadeToBlack. Pool
-            // copies are scene objects and would be destroyed at activation, so building
-            // them still waits for the new stage below.
+            // One prefab per frame, including the character select. The ring is the progress of
+            // that lazy pass. A single pin used to scan every assembly and freeze the frame;
+            // the loader is resolved at plugin load, so a pin here is only the asset start.
             bool loading = LoadingPhase.IsLoading;
             float frameSeconds = Time.unscaledDeltaTime;
             bool frameBlocked = !loading && (frameSeconds > HitchFrameSeconds || Time.unscaledTime < warmNotBefore);
-            if (!frameBlocked)
+            if (!frameBlocked && pinCursor < count)
             {
-                long pinStart = HitchProbes.Armed ? Stopwatch.GetTimestamp() : 0L;
-                int loads = Clamp(loadsPerFrame?.Value ?? 4, 1, 8);
-                int started = 0;
-                while (pinCursor < count && started < loads)
+                long pinStart = Stopwatch.GetTimestamp();
+                if (Pin(pinCursor))
                 {
-                    Pin(pinCursor);
                     pinCursor++;
-                    started++;
+                    float pinMs = (float)((Stopwatch.GetTimestamp() - pinStart) * 1000d / Stopwatch.Frequency);
+                    if (!loading && pinMs > ExpensiveWarmMs)
+                    {
+                        float cooldown = pinMs * 0.008f;
+                        warmNotBefore = Time.unscaledTime + (cooldown > 1f ? 1f : cooldown);
+                    }
                 }
 
-                if (started > 0)
-                {
-                    HitchProbes.Note(HitchProbes.Id.EffectPin, pinStart);
-                }
+                HitchProbes.Note(HitchProbes.Id.EffectPin, pinStart);
             }
 
             LoadingProgress.Set("Effect prefabs", pinCursor, count, pinCursor < count);
-            // Shader variants are global, so a compile started under the fade is not thrown
-            // away when the stage activates. The fade spends the loading budget. The rest
-            // waits for a short frame and compiles one prefab, instead of stopping.
+            // Shader variants are global, so a compile started in the character select is not thrown
+            // away when the stage activates. Outside the fade, one prefab on a short frame.
             if (warmShaders?.Value == true && shaderCursor < count && (loading || !frameBlocked))
             {
                 WarmShaderStep(count, loading);
@@ -651,12 +653,14 @@ namespace ROR_O
         private static int EnsureCatalog()
         {
             int count = EffectCatalog.effectCount;
-            if (count == handles.Length)
+            if (count == handles.Length && count == directPins.Length)
             {
                 return count;
             }
 
+            ReleaseDirectPins();
             handles = new AsyncOperationHandle<GameObject>[count];
+            directPins = new bool[count];
             addresses = new AssetReferenceT<GameObject>?[count];
             prefabs = new GameObject?[count];
             warmed = new byte[count];
@@ -671,49 +675,120 @@ namespace ROR_O
             return count;
         }
 
-        private static void Pin(int index)
+        private static bool Pin(int index)
         {
             if (settled[index] || prefabs[index] || handles[index].IsValid())
             {
-                return;
+                return true;
             }
 
             AssetReferenceT<GameObject>? knownAddress = addresses[index];
             if (knownAddress != null)
             {
-                handles[index] = EffectPools.PinAddress(knownAddress);
-                return;
+                return StartPin(index, knownAddress);
             }
 
             EffectDef? def = EffectCatalog.GetEffectDef((EffectIndex)index);
             if (def == null)
             {
                 settled[index] = true;
-                return;
+                return true;
             }
 
             AssetOrDirectReference<GameObject>? reference = EffectPools.PrefabReference(def);
             if (reference == null)
             {
                 settled[index] = true;
-                return;
+                return true;
             }
 
             AssetReferenceT<GameObject>? address = reference.address;
             if (address != null && address.RuntimeKeyIsValid())
             {
                 addresses[index] = address;
-                handles[index] = EffectPools.PinAddress(address);
-                return;
+                return StartPin(index, address);
             }
 
             if (reference.directRef)
             {
                 prefabs[index] = reference.directRef;
-                return;
+                return true;
             }
 
             settled[index] = true;
+            return true;
+        }
+
+        // False means the load could not be started yet. The caller leaves the cursor here and retries.
+        private static bool StartPin(int index, AssetReferenceT<GameObject> address)
+        {
+            if (!LoadingPhase.IsLoading)
+            {
+                handles[index] = EffectPools.PinAddress(address);
+                return true;
+            }
+
+            try
+            {
+                AsyncOperationHandle<GameObject> handle = Addressables.LoadAssetAsync<GameObject>(address);
+                if (!handle.IsValid())
+                {
+                    return false;
+                }
+
+                handles[index] = handle;
+                directPins[index] = true;
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                if (!directPinFailed)
+                {
+                    directPinFailed = true;
+                    RORO.GlobalLogger?.LogWarning($"Effect prefab load did not start: {exception.Message}");
+                }
+
+                return false;
+            }
+        }
+
+        private static void OnRunDestroy(Run run)
+        {
+            int first = ReleaseDirectPins();
+            if (first >= 0 && first < pinCursor)
+            {
+                pinCursor = first;
+            }
+        }
+
+        // Handles started directly are ours. The game does not release them on run end.
+        // Returns the first index that was released, or -1.
+        private static int ReleaseDirectPins()
+        {
+            int first = -1;
+            int count = directPins.Length < handles.Length ? directPins.Length : handles.Length;
+            for (int i = 0; i < count; i++)
+            {
+                if (!directPins[i])
+                {
+                    continue;
+                }
+
+                directPins[i] = false;
+                AsyncOperationHandle<GameObject> handle = handles[i];
+                handles[i] = default;
+                if (handle.IsValid())
+                {
+                    Addressables.Release(handle);
+                }
+
+                if (first < 0)
+                {
+                    first = i;
+                }
+            }
+
+            return first;
         }
 
         // Shader compilation is global, so unlike pool copies it survives scene activation.
@@ -731,6 +806,13 @@ namespace ROR_O
                     AsyncOperationHandle<GameObject> handle = handles[shaderCursor];
                     if (!handle.IsValid())
                     {
+                        // Not pinned yet. Skipping here would move the cursor past prefabs the pin
+                        // loop has not started, and those variants would never be compiled.
+                        if (shaderCursor >= pinCursor)
+                        {
+                            break;
+                        }
+
                         shaderCursor++;
                         continue;
                     }
@@ -830,6 +912,8 @@ namespace ROR_O
 
             try
             {
+                // WarmUp runs on this thread and does not return until the variants are compiled.
+                // Unity 2021.3 has no background compile, and this call is not safe off the main thread.
                 shaderBatch.WarmUp();
                 shaderCollections.Add(shaderBatch);
             }

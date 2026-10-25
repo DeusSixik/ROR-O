@@ -191,6 +191,10 @@
             <HintPath>$(GameManagedDir)\RoR2.dll</HintPath>
             <Publicize>true</Publicize>
         </Reference>
+        <Reference Include="HGCSharpUtils">
+            <HintPath>$(GameManagedDir)\HGCSharpUtils.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
         <Reference Include="System">
             <HintPath>$(GameManagedDir)\System.dll</HintPath>
         </Reference>

@@ -5,10 +5,12 @@ using System.Text;
 using BepInEx.Configuration;
 using HarmonyLib;
 using RoR2;
+using RoR2.ContentManagement;
 using RoR2.Networking;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 using UnityEngine.Networking;
+using UnityEngine.ResourceManagement.AsyncOperations;
 using UnityEngine.SceneManagement;
 
 namespace ROR_O
@@ -17,6 +19,9 @@ namespace ROR_O
     // The game already does that for the selected non-champion masters, all inside one network message.
     // This spreads the same call across frames. Champions are not in that message; the stage list adds them.
     // Instantiating a prefab and destroying it does not keep that load, and Awake runs again on the real spawn.
+    // While a scene is loading the game's own loader refuses the call and would drop a Preload handle on
+    // activation, so the fade only starts Addressables loads and does not wait. The game registers them
+    // after the stage is in.
     internal sealed class SpawnPrewarm : MonoBehaviour
     {
         // Same gate EffectRuntime uses: a frame that already ran long does not also start a preload.
@@ -26,10 +31,9 @@ namespace ROR_O
         private static readonly HashSet<CharacterMaster> queued = new HashSet<CharacterMaster>();
         private static readonly HashSet<CharacterMaster> done = new HashSet<CharacterMaster>();
         // Masters the server sent for the incoming stage while this peer was still under
-        // FadeToBlack, plus the subset already preloaded in that window. Scene load would
-        // normally reset the queue and throw that work away; OnSceneLoaded keeps both.
+        // FadeToBlack. Scene load would normally reset the queue; OnSceneLoaded keeps them
+        // so the game can register the loads once activation no longer refuses them.
         private static readonly HashSet<CharacterMaster> incomingMasters = new HashSet<CharacterMaster>();
-        private static readonly HashSet<CharacterMaster> incomingWarmed = new HashSet<CharacterMaster>();
         private static readonly HashSet<string> eliteDisplayPins = new HashSet<string>();
         private static readonly StringBuilder statusBuilder = new StringBuilder(256);
 
@@ -46,6 +50,7 @@ namespace ROR_O
         private const float LateSpawnImmunitySeconds = 5f;
 
         private static int cursor;
+        private static readonly Dictionary<int, int> assetKickFrame = new Dictionary<int, int>();
         private static int warmedSinceLog;
         private static int stageListed;
         private static int stageQueued;
@@ -84,7 +89,7 @@ namespace ROR_O
                 section,
                 "Prewarm Stage Spawns",
                 true,
-                "Preloads the animator, avatar, and skins of monsters this stage can spawn, spread across frames. Uses the game's own master preload and can also include bosses from that list. Takes effect on the next stage.");
+                "Preloads the animator, avatar, and skins of monsters this stage can spawn. While the stage is loading, those loads start in the background and this does not wait for them. After the stage is in, the game is told about them a few masters at a time. Can include bosses from the stage list. Takes effect on the next stage.");
 
             mastersPerFrame = config.Bind(
                 section,
@@ -147,6 +152,10 @@ namespace ROR_O
             }
 
             pending.Add(master);
+            // The read starts as soon as the master is known. Registration with the game waits
+            // for a later frame, and only once the read has finished.
+            EnqueueMasterAssets(master);
+            assetKickFrame[master.GetInstanceID()] = Time.frameCount;
             return true;
         }
 
@@ -154,13 +163,21 @@ namespace ROR_O
         {
             Stage.onStageStartGlobal += OnStageStart;
             SceneManager.sceneLoaded += OnSceneLoaded;
+            Run.onRunDestroyGlobal += OnRunDestroy;
         }
 
         private void OnDisable()
         {
             Stage.onStageStartGlobal -= OnStageStart;
             SceneManager.sceneLoaded -= OnSceneLoaded;
+            Run.onRunDestroyGlobal -= OnRunDestroy;
             ResetQueue();
+            AssetLoadAhead.ReleaseAll();
+        }
+
+        private static void OnRunDestroy(Run run)
+        {
+            AssetLoadAhead.ReleaseAll();
         }
 
         private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -179,31 +196,16 @@ namespace ROR_O
 
             // Fires before Start on the new scene, so the stage list and the network preload
             // message are still ahead of this. Drop the previous stage and preload the next one.
-            // Work already done in the loading window is the exception: masters sent for this
-            // stage and preloaded under FadeToBlack stay done, and the unprocessed rest of
-            // that list stays queued instead of being thrown away with the old stage.
+            // Masters whose loads were started under FadeToBlack stay queued: the game still has
+            // to register them, and that call does nothing until the scene has activated.
             if (incomingMasters.Count == 0)
             {
                 ResetQueue();
                 return;
             }
 
-            var keepPending = new List<CharacterMaster>();
-            foreach (CharacterMaster master in incomingMasters)
-            {
-                if (!incomingWarmed.Contains(master))
-                {
-                    keepPending.Add(master);
-                }
-            }
-
-            var keepDone = new List<CharacterMaster>(incomingWarmed);
+            var keepPending = new List<CharacterMaster>(incomingMasters);
             ResetQueue();
-            foreach (CharacterMaster master in keepDone)
-            {
-                done.Add(master);
-            }
-
             foreach (CharacterMaster master in keepPending)
             {
                 Enqueue(master);
@@ -216,7 +218,7 @@ namespace ROR_O
             queued.Clear();
             done.Clear();
             incomingMasters.Clear();
-            incomingWarmed.Clear();
+            assetKickFrame.Clear();
             cursor = 0;
             warmedSinceLog = 0;
             stageListed = 0;
@@ -249,19 +251,17 @@ namespace ROR_O
         private void Update()
         {
             MaybeLogStatus();
-            if (!Enabled || cursor >= pending.Count || LoadingPhase.IsStartupSplash(SceneManager.GetActiveScene().name))
+            if (!Enabled || LoadingPhase.IsStartupSplash(SceneManager.GetActiveScene().name))
             {
                 sceneHold = false;
                 return;
             }
 
-            // In the loading window a preload is only an Addressables load start, which
-            // survives scene activation, so the queue keeps moving under FadeToBlack with
-            // the shared loading budget instead of the in-game per-frame count. Masters
-            // that arrive for the incoming stage are marked in OnSceneLoaded's keep sets,
-            // so activation does not throw this work away.
+            // Loads start when the master is queued. The game's PreloadAssets refuses to run
+            // during the fade and, once the stage is in, waits if the read is not finished.
+            // Registration waits until that read is done, and never on the frame that started it.
             bool loading = LoadingPhase.IsLoading;
-            sceneHold = loading;
+            sceneHold = loading && cursor < pending.Count;
             if (!loading && skipLongFrames?.Value == true && Time.unscaledDeltaTime > HitchFrameSeconds)
             {
                 longSkips++;
@@ -271,27 +271,39 @@ namespace ROR_O
             int budget = Clamp(mastersPerFrame?.Value ?? 1, 1, 4);
             long frameStart = Stopwatch.GetTimestamp();
             int processed = 0;
-            while (cursor < pending.Count)
+            if (!loading)
             {
-                if (loading)
+                int scanned = 0;
+                int limit = pending.Count - cursor;
+                while (processed < budget && scanned < limit && cursor < pending.Count)
                 {
-                    if (LoadingPhase.BudgetExpired(frameStart, processed))
+                    CharacterMaster master = pending[cursor];
+                    scanned++;
+                    if (!master)
                     {
-                        break;
+                        cursor++;
+                        missing++;
+                        continue;
                     }
-                }
-                else if (processed >= budget)
-                {
-                    break;
-                }
 
-                WarmOne();
-                processed++;
+                    int id = master.GetInstanceID();
+                    bool startedThisFrame = assetKickFrame.TryGetValue(id, out int kickFrame) && kickFrame == Time.frameCount;
+                    if (startedThisFrame || !MasterAssetsReady(master))
+                    {
+                        pending.RemoveAt(cursor);
+                        pending.Add(master);
+                        continue;
+                    }
+
+                    WarmOne();
+                    processed++;
+                }
             }
 
+            AssetLoadAhead.Pump(frameStart, processed);
             PublishProgress();
 
-            if (cursor < pending.Count)
+            if (loading || cursor < pending.Count)
             {
                 return;
             }
@@ -368,14 +380,12 @@ namespace ROR_O
 
             long started = Stopwatch.GetTimestamp();
             done.Add(master);
-            if (LoadingPhase.IsLoading)
-            {
-                incomingWarmed.Add(master);
-            }
-
+            assetKickFrame.Remove(master.GetInstanceID());
             master.PreloadAssets();
             long preloaded = Stopwatch.GetTimestamp();
             PinEliteDisplays(master);
+            // The game's loader now holds these. Dropping the extra handle leaves that one in place.
+            ReleaseMasterAssets(master);
             long finished = Stopwatch.GetTimestamp();
             if (HitchProbes.Armed)
             {
@@ -399,8 +409,226 @@ namespace ROR_O
         private static void PublishProgress()
         {
             int left = pending.Count > cursor ? pending.Count - cursor : 0;
-            LoadingProgress.Set("Mobs", warmed, warmed + left, left > 0);
-            LoadingProgress.Set("Elite displays", warmed, warmed + left, left > 0 && eliteDisplays > 0);
+            int total = warmed + left;
+            // Nothing queued and nothing warmed. Publishing 0/0 still creates the lines, and a
+            // line at zero that is not working stays on screen. The menu was showing that.
+            if (total <= 0)
+            {
+                return;
+            }
+
+            LoadingProgress.Set("Mobs", warmed, total, left > 0);
+            if (eliteDisplays > 0)
+            {
+                LoadingProgress.Set("Elite displays", warmed, total, left > 0);
+            }
+        }
+
+        private enum AssetVisit
+        {
+            Enqueue,
+            Release,
+            Ready
+        }
+
+        private static void EnqueueMasterAssets(CharacterMaster master)
+        {
+            VisitMasterAssets(master, AssetVisit.Enqueue);
+        }
+
+        private static void ReleaseMasterAssets(CharacterMaster master)
+        {
+            VisitMasterAssets(master, AssetVisit.Release);
+        }
+
+        // True when every address this master needs has finished reading, or was already in memory.
+        private static bool MasterAssetsReady(CharacterMaster master)
+        {
+            return VisitMasterAssets(master, AssetVisit.Ready);
+        }
+
+        // Same addresses CharacterBody.PreloadAssets and the skin preload walk ask the game to load.
+        // Enqueue only starts an Addressables read. Release drops our handle after the game has its own.
+        private static bool VisitMasterAssets(CharacterMaster master, AssetVisit visit)
+        {
+            GameObject? bodyPrefab = master.bodyPrefab;
+            if (!bodyPrefab || !bodyPrefab.TryGetComponent(out ModelLocator? locator) || locator == null || !locator.modelTransform)
+            {
+                return true;
+            }
+
+            bool ready = true;
+            if (locator.modelTransform.TryGetComponent(out ModelSkinController? skins) && skins != null)
+            {
+                if (!VisitReference(skins.animatorControllerRef, visit))
+                {
+                    ready = false;
+                }
+
+                if (!VisitReference(skins.avatarRef, visit))
+                {
+                    ready = false;
+                }
+
+                SkinDef[]? skinDefs = skins.skins;
+                if (skinDefs != null)
+                {
+                    for (int i = 0; i < skinDefs.Length; i++)
+                    {
+                        SkinDef? skin = skinDefs[i];
+                        SkinDef.RuntimeSkin? runtime = skin ? skin.runtimeSkin : null;
+                        if (runtime == null)
+                        {
+                            continue;
+                        }
+
+                        foreach (SkinDef.MeshReplacementTemplate template in runtime.meshReplacementTemplates)
+                        {
+                            if (!VisitReference(template.meshReference, visit))
+                            {
+                                ready = false;
+                            }
+                        }
+
+                        foreach (SkinDef.RendererInfoTemplate template in runtime.rendererInfoTemplates)
+                        {
+                            if (!VisitReference(template.materialReference, visit))
+                            {
+                                ready = false;
+                            }
+                        }
+
+                        foreach (SkinDef.GhostReplacementTemplate template in runtime.ghostReplacementTemplates)
+                        {
+                            if (!VisitReference(template.ghostReference, visit))
+                            {
+                                ready = false;
+                            }
+                        }
+
+                        foreach (SkinDef.GameObjectActivationTemplate template in runtime.gameObjectActivationTemplates)
+                        {
+                            if (!VisitReference(template.prefabReference, visit))
+                            {
+                                ready = false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!VisitEliteDisplays(master, visit))
+            {
+                ready = false;
+            }
+
+            return ready;
+        }
+
+        private static bool VisitReference<T>(AssetOrDirectReference<T>? reference, AssetVisit visit) where T : UnityEngine.Object
+        {
+            if (reference == null)
+            {
+                return true;
+            }
+
+            AssetReferenceT<T>? address = reference.address;
+            if (address == null || !address.RuntimeKeyIsValid())
+            {
+                return true;
+            }
+
+            if (visit != AssetVisit.Release && reference.IsLoaded())
+            {
+                return true;
+            }
+
+            if (visit == AssetVisit.Release)
+            {
+                // Release even when the game has since finished the load. Skipping that would
+                // keep our handle, and the asset would outlive the game's own preload.
+                AssetLoadAhead.Release(address);
+                return true;
+            }
+
+            if (visit == AssetVisit.Enqueue)
+            {
+                AssetLoadAhead.Enqueue(address);
+                return true;
+            }
+
+            if (!AssetLoadAhead.IsSettled(address))
+            {
+                AssetLoadAhead.Enqueue(address);
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool VisitEliteDisplays(CharacterMaster master, AssetVisit visit)
+        {
+            if (!EliteCatalog.availability.available)
+            {
+                return true;
+            }
+
+            GameObject? bodyPrefab = master.bodyPrefab;
+            if (!bodyPrefab || !bodyPrefab.TryGetComponent(out ModelLocator? locator) || locator == null || !locator.modelTransform)
+            {
+                return true;
+            }
+
+            if (!locator.modelTransform.TryGetComponent(out CharacterModel? model) || model == null || !model.itemDisplayRuleSet)
+            {
+                return true;
+            }
+
+            bool ready = true;
+            ItemDisplayRuleSet ruleSet = model.itemDisplayRuleSet;
+            foreach (EliteIndex eliteIndex in EliteCatalog.eliteList)
+            {
+                EliteDef? eliteDef = EliteCatalog.GetEliteDef(eliteIndex);
+                if (eliteDef == null || !eliteDef.eliteEquipmentDef || !eliteDef.IsAvailable())
+                {
+                    continue;
+                }
+
+                DisplayRuleGroup group = ruleSet.GetEquipmentDisplayRuleGroup(eliteDef.eliteEquipmentDef.equipmentIndex);
+                if (group.rules == null)
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < group.rules.Length; i++)
+                {
+                    AssetReferenceGameObject? address = group.rules[i].followerPrefabAddress;
+                    if (address == null || !address.RuntimeKeyIsValid())
+                    {
+                        continue;
+                    }
+
+                    if (visit == AssetVisit.Release)
+                    {
+                        AssetLoadAhead.Release(address);
+                        continue;
+                    }
+
+                    if (visit == AssetVisit.Enqueue)
+                    {
+                        AssetLoadAhead.Enqueue(address);
+                        continue;
+                    }
+
+                    if (!AssetLoadAhead.IsSettled(address))
+                    {
+                        AssetLoadAhead.Enqueue(address);
+                        ready = false;
+                    }
+                }
+            }
+
+            return ready;
         }
 
         // An elite is equipment on an ordinary spawn, so there is no elite master to preload.
@@ -449,12 +677,19 @@ namespace ROR_O
                         continue;
                     }
 
-                    if (!eliteDisplayPins.Add(address.RuntimeKey.ToString()))
+                    string key = address.RuntimeKey.ToString();
+                    if (!eliteDisplayPins.Add(key))
                     {
                         continue;
                     }
 
-                    EffectPools.PinAddress(new AssetReferenceT<GameObject>(address.AssetGUID));
+                    AsyncOperationHandle<GameObject> handle = EffectPools.PinAddress(new AssetReferenceT<GameObject>(address.AssetGUID));
+                    if (!handle.IsValid())
+                    {
+                        eliteDisplayPins.Remove(key);
+                        continue;
+                    }
+
                     eliteDisplays++;
                 }
             }

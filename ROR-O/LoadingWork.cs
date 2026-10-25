@@ -8,10 +8,11 @@ namespace ROR_O
     // Shared view of the between-stage loading window and a place for preload producers to
     // publish plain counts. The window is the network scene load: FadeToBlack is up while a
     // peer is still loading or not ready, the run stopwatch is paused (no living players),
-    // and a slow client does not hold the host's stage start. Only asset loads and global
-    // caches survive scene activation; anything instantiated in the old scene is destroyed
-    // when the new scene activates, and effect pools are killed on scene unload regardless.
-    // Producers therefore load assets in the window and build copies after activation.
+    // and a slow client does not hold the host's stage start. The game's own preload list is
+    // released when the new scene activates, and that loader refuses to start a load during
+    // the window. A direct Addressables load held by us keeps running on the loader thread.
+    // Anything instantiated in the old scene is destroyed when the new scene activates, and
+    // effect pools are killed on scene unload regardless, so copies are built after activation.
     internal static class LoadingPhase
     {
         // Generous per-frame budget for the window, not an unbounded burst: the loading
@@ -236,7 +237,9 @@ namespace ROR_O
                     fades.Insert(i, row);
                 }
 
-                if (live || fraction < 0.999f)
+                // A line at zero that is not working has nothing to show. Treating that as
+                // "paused before the end" eased the mob and elite rows in on the menu.
+                if (live || (fraction > 0.001f && fraction < 0.999f))
                 {
                     // Still working, or the producer paused before the end. Either way the
                     // row stays. A rollback during the exit turns the row back from here.
@@ -246,6 +249,13 @@ namespace ROR_O
                     row.Presence = Approach(row.Presence, 1f, dt, AppearSeconds);
                     row.Alpha = Approach(row.Alpha, 1f, dt, AppearSeconds);
                     row.Roll = Approach(row.Roll, 0f, dt, AppearSeconds);
+                }
+                else if (row.Presence <= 0.004f && row.Alpha <= 0.004f)
+                {
+                    // Never appeared. The exit below would otherwise pop it to full size.
+                    row.Shown = fraction;
+                    row.Leaving = false;
+                    row.HoldLeft = 0f;
                 }
                 else
                 {

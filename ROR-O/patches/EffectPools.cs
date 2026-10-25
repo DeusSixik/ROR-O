@@ -94,6 +94,10 @@ namespace ROR_O
                     postfix: new HarmonyMethod(typeof(EffectPools), nameof(NoteSpawned)));
             }
 
+            // Resolve the loader now, during plugin load. The first pin used to pay this on a
+            // visible frame, and the old lookup scanned every assembly.
+            EnsureLoad();
+
             MethodInfo? disable = AccessTools.Method(typeof(VFXAttributes), "OnDisable");
             if (disable != null)
             {
@@ -301,9 +305,28 @@ namespace ROR_O
                 return;
             }
 
+            // TypeByName calls GetTypes on every loaded assembly. That scan was 18 seconds
+            // on the first pin. Both types live in AsyncManagement, so one assembly lookup is enough.
+            Assembly? assembly = null;
+            Assembly[] loaded = AppDomain.CurrentDomain.GetAssemblies();
+            for (int i = 0; i < loaded.Length; i++)
+            {
+                AssemblyName name = loaded[i].GetName();
+                if (string.Equals(name.Name, "AsyncManagement", System.StringComparison.Ordinal))
+                {
+                    assembly = loaded[i];
+                    break;
+                }
+            }
+
+            if (assembly == null)
+            {
+                return;
+            }
+
             loadResolved = true;
-            Type? open = AccessTools.TypeByName("RoR2.ContentManagement.AssetAsyncReferenceManager`1");
-            Type? unload = AccessTools.TypeByName("RoR2.ContentManagement.AsyncReferenceHandleUnloadType");
+            Type? open = assembly.GetType("RoR2.ContentManagement.AssetAsyncReferenceManager`1");
+            Type? unload = assembly.GetType("RoR2.ContentManagement.AsyncReferenceHandleUnloadType");
             if (open == null || unload == null)
             {
                 RORO.GlobalLogger?.LogWarning("Effect prefab pinning is unavailable; the asset loader type was not found.");
@@ -319,6 +342,7 @@ namespace ROR_O
             }
 
             onRunEnd = Enum.Parse(unload, "OnRunEnd");
+            RORO.GlobalLogger?.LogInfo("Effect prefab loader resolved.");
         }
 
         private static bool SkipIdlePoolUnload()
