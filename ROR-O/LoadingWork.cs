@@ -74,16 +74,22 @@ namespace ROR_O
         }
     }
 
-    // One line per active preload: ring, percent, name. Drawn only while something is
-    // actually loading, from the counts producers already publish.
+    // One line per preload: ring, percent, name. A line eases in while its producer is
+    // working and, once that work stops, holds the percent it reached and eases back out.
+    // The block height follows the same curve, so the debug readouts below it move with it.
     internal sealed class LoadingProgressView : MonoBehaviour
     {
         private const float RowHeight = 28f;
         private const float RingSize = 22f;
+        private const float AppearSeconds = 0.18f;
+        private const float FadeSeconds = 0.42f;
+        private const float FractionSeconds = 0.14f;
 
         private static readonly string[] Percents = BuildPercents();
+        private static readonly List<RowFade> fades = new List<RowFade>();
         private static Texture2D?[] rings = new Texture2D?[51];
         private static int ringPixels;
+        private static int motionFrame = -1;
 
         private static GUIStyle? labelStyle;
 
@@ -92,18 +98,27 @@ namespace ROR_O
         private void OnGUI()
         {
             IReadOnlyList<LoadingProgressEntry> entries = LoadingProgress.Entries;
-            int visible = 0;
+            Advance(entries);
+
+            float height = 0f;
+            float open = 0f;
             for (int i = 0; i < entries.Count; i++)
             {
-                LoadingProgressEntry entry = entries[i];
-                if (entry.Active && entry.Total > 0)
+                RowFade row = fades[i];
+                if (row.Presence <= 0.004f)
                 {
-                    visible++;
+                    continue;
+                }
+
+                height += RowHeight * row.Presence;
+                if (row.Presence > open)
+                {
+                    open = row.Presence;
                 }
             }
 
-            BlockHeight = visible == 0 ? 0f : 8f + visible * RowHeight;
-            if (visible == 0)
+            BlockHeight = height <= 0.01f ? 0f : 8f * open + height;
+            if (height <= 0.01f || Event.current.type != EventType.Repaint)
             {
                 return;
             }
@@ -119,15 +134,68 @@ namespace ROR_O
                 labelStyle.normal.textColor = Color.white;
             }
 
+            Color previous = GUI.color;
             float y = 12f;
             for (int i = 0; i < entries.Count; i++)
             {
-                LoadingProgressEntry entry = entries[i];
-                if (!entry.Active || entry.Total <= 0)
+                RowFade row = fades[i];
+                if (row.Presence <= 0.004f)
                 {
                     continue;
                 }
 
+                // The slot under the row still grows with the fade, so the debug readouts
+                // keep sliding. The row itself is not clipped to that slot: a group would
+                // cut the ring and the text on a horizontal line while they appear.
+                float slot = RowHeight * row.Presence;
+                float settle = (1f - row.Presence) * 8f;
+                GUI.color = new Color(1f, 1f, 1f, row.Presence);
+                Rect ring = RingRect(new Vector2(16f, y + 2f - settle));
+                GUI.DrawTexture(ring, RingTexture(row.Shown, ringPixels), ScaleMode.StretchToFill, true);
+
+                int percent = (int)(row.Shown * 100f + 0.5f);
+                if (percent < 0)
+                {
+                    percent = 0;
+                }
+                else if (percent > 100)
+                {
+                    percent = 100;
+                }
+
+                GUI.Label(new Rect(44f, y - settle, 56f, 26f), Percents[percent], labelStyle);
+                GUI.Label(new Rect(104f, y - settle, 520f, 26f), row.Label, labelStyle);
+                y += slot;
+            }
+
+            GUI.color = previous;
+            HitchProbes.Note(HitchProbes.Id.ProgressRings, started);
+        }
+
+        // Exponential approach is reversible: a line that has started fading and whose producer
+        // reports work again (a prefab whose count fell) turns around from wherever it is.
+        private static void Advance(IReadOnlyList<LoadingProgressEntry> entries)
+        {
+            if (Time.frameCount == motionFrame)
+            {
+                return;
+            }
+
+            motionFrame = Time.frameCount;
+            float dt = Time.unscaledDeltaTime;
+            if (dt < 0f)
+            {
+                dt = 0f;
+            }
+            else if (dt > 0.1f)
+            {
+                dt = 0.1f;
+            }
+
+            for (int i = 0; i < entries.Count; i++)
+            {
+                LoadingProgressEntry entry = entries[i];
+                bool live = entry.Active && entry.Total > 0;
                 float fraction = entry.Fraction;
                 if (fraction < 0f)
                 {
@@ -138,26 +206,63 @@ namespace ROR_O
                     fraction = 1f;
                 }
 
-                if (Event.current.type == EventType.Repaint)
+                RowFade row;
+                if (i < fades.Count && fades[i].Label == entry.Label)
                 {
-                    // The box is 22 GUI units. Its screen size changes with the window and the
-                    // DPI scale, the same scale the font rasterizer uses for the label beside it.
-                    Rect ring = RingRect(new Vector2(16f, y + 2f));
-                    GUI.DrawTexture(ring, RingTexture(fraction, ringPixels), ScaleMode.StretchToFill, true);
+                    row = fades[i];
+                }
+                else
+                {
+                    // Start on the real percent. Only the row itself eases in; the number
+                    // must not count up from zero while the line is appearing.
+                    row = new RowFade { Label = entry.Label, Shown = fraction };
+                    fades.Insert(i, row);
                 }
 
-                int percent = (int)(fraction * 100f + 0.5f);
-                if (percent > 100)
+                if (live)
                 {
-                    percent = 100;
+                    row.Holding = false;
+                    row.Shown = Approach(row.Shown, fraction, dt, FractionSeconds);
+                    row.Presence = Approach(row.Presence, 1f, dt, AppearSeconds);
+                }
+                else
+                {
+                    if (!row.Holding)
+                    {
+                        row.Holding = true;
+                    }
+
+                    row.Presence = Approach(row.Presence, 0f, dt, FadeSeconds);
                 }
 
-                GUI.Label(new Rect(44f, y, 56f, 26f), Percents[percent], labelStyle);
-                GUI.Label(new Rect(104f, y, 520f, 26f), entry.Label, labelStyle);
-                y += RowHeight;
+                if (!live && row.Presence < 0.004f)
+                {
+                    row.Presence = 0f;
+                }
+                else if (live && row.Presence > 0.996f)
+                {
+                    row.Presence = 1f;
+                }
+            }
+        }
+
+        private static float Approach(float current, float target, float dt, float seconds)
+        {
+            if (seconds <= 0f)
+            {
+                return target;
             }
 
-            HitchProbes.Note(HitchProbes.Id.ProgressRings, started);
+            float blend = 1f - Mathf.Exp(-dt / seconds);
+            return current + (target - current) * blend;
+        }
+
+        private sealed class RowFade
+        {
+            internal string Label = "";
+            internal float Presence;
+            internal float Shown;
+            internal bool Holding;
         }
 
         // One GUI unit, measured in screen pixels, including the window scale. The ring is
