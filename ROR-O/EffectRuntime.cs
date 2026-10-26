@@ -8,6 +8,7 @@ using RoR2.ContentManagement;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 using UnityEngine.Networking;
+using UnityEngine.Rendering;
 using UnityEngine.ResourceManagement.AsyncOperations;
 using UnityEngine.SceneManagement;
 
@@ -46,6 +47,7 @@ namespace ROR_O
         private static ConfigEntry<bool>? cullOffScreen;
         private static ConfigEntry<int>? cullInterval;
         private static ConfigEntry<bool>? showStatus;
+        private static ConfigEntry<bool>? showShaderStatus;
         private static ConfigEntry<bool>? logStatus;
         private static float nextLogTime;
 
@@ -73,8 +75,39 @@ namespace ROR_O
         private static int shaderVariants;
         private static readonly HashSet<string> shaderVariantKeys = new HashSet<string>();
         private static readonly List<ShaderVariantCollection> shaderCollections = new List<ShaderVariantCollection>();
+        private static readonly List<Shader> pinnedShaders = new List<Shader>();
+        private static readonly List<AsyncOperationHandle<GameObject>> shaderHolds = new List<AsyncOperationHandle<GameObject>>();
+        private static readonly List<GameObject> shaderHoldPrefabs = new List<GameObject>();
+        private static readonly Dictionary<int, ShaderWarmInfo> shaderInfo = new Dictionary<int, ShaderWarmInfo>();
+        private static readonly List<PassType> passScratch = new List<PassType>(4);
+        private static readonly List<string> keywordScratch = new List<string>(16);
+        private static readonly List<string> keywordCombo = new List<string>(16);
+        private static readonly StringBuilder variantKey = new StringBuilder(160);
+        private static readonly string[] FogKeywordNames = { "FOG_LINEAR", "FOG_EXP", "FOG_EXP2" };
         private static ShaderVariantCollection? shaderBatch;
         private static int shaderBatchCount;
+        private static bool[] shaderHeld = System.Array.Empty<bool>();
+        private static ShaderTagId lightModeTag;
+        private static bool lightModeTagReady;
+        private static readonly List<string> batchKeys = new List<string>(24);
+        private static readonly Dictionary<string, WarmBatchMark> variantMarks = new Dictionary<string, WarmBatchMark>();
+        private static readonly List<string> traceScratch = new List<string>(16);
+        private static readonly List<string> traceCombo = new List<string>(16);
+        private static readonly StringBuilder traceKey = new StringBuilder(160);
+        private static readonly List<string> shaderTraceLines = new List<string>(6);
+        private static byte[] effectTrace = System.Array.Empty<byte>();
+        private static int traceFogStamp = int.MinValue;
+        private static int traceMisses;
+        private static int traceRecorded;
+        private static int traceCompiled;
+        private static int traceEmpty;
+        private static int traceUnloaded;
+        private static int traceNotPooled;
+        private static int traceRepeats;
+        private static int shaderWarmCalls;
+        private static long shaderWarmMicroseconds;
+        private static float shaderStatusRefresh;
+        private static string shaderStatusText = "Shader compile status is not ready yet.";
         private static int culledEffects;
         private static int frame;
         private static float lastWarmTime;
@@ -87,6 +120,7 @@ namespace ROR_O
         private static float lastStatusRefresh;
         private static string statusText = "Effect status is not ready yet.";
         private static GUIStyle? statusStyle;
+        private static GUIStyle? shaderStyle;
 
         internal static ConfigEntry<SettingsProfiles.Profile>? Profile { get; private set; }
         internal static ConfigEntry<bool>? WarmEffects => warmEffects;
@@ -103,6 +137,9 @@ namespace ROR_O
         internal static ConfigEntry<bool>? CullOffScreenEntry => cullOffScreen;
         internal static ConfigEntry<int>? CullIntervalEntry => cullInterval;
         internal static ConfigEntry<bool>? ShowStatusEntry => showStatus;
+        internal static ConfigEntry<bool>? ShowShaderStatusEntry => showShaderStatus;
+        internal static bool ShowShaderStatus => showShaderStatus?.Value == true;
+        internal const float ShaderStatusBlockHeight = 250f;
         internal static ConfigEntry<bool>? LogStatusEntry => logStatus;
 
         internal static bool KeepPools => keepPools?.Value ?? true;
@@ -147,7 +184,7 @@ namespace ROR_O
                 section,
                 "Warm Effect Shaders",
                 false,
-                "<color=#FFDD44>[Experimental]</color> Collects the shader variants of effect prefab materials and compiles them, so the first spawn of an effect does not pay shader compilation. This waits until the lobby. The black screen between stages does as many as a frame can take, and whatever is left continues during play, one prefab on a short frame. The boot splash, the intro cutscene, and the title menu are left alone. Variants are guessed from material keywords and may miss combinations the game uses.");
+                "<color=#FFDD44>[Experimental]</color> Compiles the shader variants pooled effects draw: the material's own keywords, soft particles and GPU instancing when those are on, and each fog mode the shader declares, on the passes those materials use. Effects marked do-not-pool are skipped. A prefab is held for the session per shader so the run-end release does not drop the compiled programs; if a held shader is gone anyway, the pass starts over. This waits until the lobby. The black screen between stages does as many as a frame can take, and whatever is left continues during play, one prefab on a short frame. The boot splash, the intro cutscene, and the title menu are left alone.");
 
             warmPeakCopies = config.Bind(
                 section,
@@ -205,6 +242,12 @@ namespace ROR_O
                 false,
                 "Draws the live effect-pool counts on screen.");
 
+            showShaderStatus = config.Bind(
+                section,
+                "Show Shader Compile",
+                false,
+                "Draws effect-shader warmup progress and, on the first spawn of each pooled effect, checks the variant that spawn will draw. A hit means that variant is in a collection whose WarmUp already returned. This release player does not report Shader.CreateGPUProgram, so a hit is not proof the driver built a GPU program. The panel shows how long that WarmUp batch took.");
+
             logStatus = config.Bind(
                 section,
                 "Log Effect Status",
@@ -227,6 +270,7 @@ namespace ROR_O
             SettingsProfiles.Add(cullOffScreen, false, true, true);
             SettingsProfiles.Add(cullInterval, 8, 4, 2);
             SettingsProfiles.Add(showStatus, false, false, false);
+            SettingsProfiles.Add(showShaderStatus, false, false, false);
             SettingsProfiles.Add(logStatus, false, false, false);
             SettingsProfiles.End();
         }
@@ -265,12 +309,17 @@ namespace ROR_O
         // array read and one dictionary count.
         internal static void NoteEffectSpawned(EffectIndex effectIndex)
         {
+            int index = (int)effectIndex;
+            if (showShaderStatus?.Value == true && index >= 0 && index < prefabs.Length)
+            {
+                TraceSpawn(index);
+            }
+
             if (warmEffects?.Value != true)
             {
                 return;
             }
 
-            int index = (int)effectIndex;
             if (index < 0 || index >= peakInUse.Length)
             {
                 return;
@@ -342,6 +391,7 @@ namespace ROR_O
             SceneManager.sceneUnloaded -= OnSceneUnloaded;
             Run.onRunDestroyGlobal -= OnRunDestroy;
             ReleaseDirectPins();
+            ReleaseShaderHolds();
         }
 
         private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -624,6 +674,24 @@ namespace ROR_O
 
         private void OnGUI()
         {
+            if (showShaderStatus?.Value == true)
+            {
+                if (Time.unscaledTime - shaderStatusRefresh >= 0.5f)
+                {
+                    shaderStatusRefresh = Time.unscaledTime;
+                    RefreshShaderStatus();
+                }
+
+                shaderStyle ??= new GUIStyle(GUI.skin.label)
+                {
+                    fontSize = 14,
+                    wordWrap = true
+                };
+                shaderStyle.normal.textColor = Color.white;
+                float width = 740f;
+                GUI.Label(new Rect(Screen.width - width - 16f, 16f + LoadingProgressView.BlockHeight, width, ShaderStatusBlockHeight), shaderStatusText, shaderStyle);
+            }
+
             if (showStatus?.Value != true)
             {
                 return;
@@ -669,9 +737,11 @@ namespace ROR_O
             queued = new bool[count];
             warmQueue.Clear();
             pinCursor = 0;
-            shaderCursor = 0;
             warmedPrefabs = 0;
             instancesBuilt = 0;
+            ForgetShaderWarmup(true);
+            shaderHeld = new bool[count];
+            effectTrace = new byte[count];
             return count;
         }
 
@@ -791,15 +861,30 @@ namespace ROR_O
             return first;
         }
 
-        // Shader compilation is global, so unlike pool copies it survives scene activation.
-        // Variants are guessed from each material's own keywords; a combination Unity rejects
-        // is skipped, and a missed combination just compiles at its first real spawn.
+        // Pooled effects are the short-lived ones: shots, impacts, tracers, orbs, item procs.
+        // DoNotPool stays out. The variant is the material keywords plus the runtime axes the
+        // shader actually declares (soft particles, GPU instancing, fog). PassType comes from
+        // the pass LightMode. A second addressable ref holds one prefab per shader for the
+        // session; Addressables.Release of the run pin does not keep the GPU program alive.
         private static void WarmShaderStep(int count, bool rush)
         {
+            if (ShadersWereEvicted())
+            {
+                ForgetShaderWarmup(true);
+                shaderHeld = new bool[count];
+            }
+
             long started = Stopwatch.GetTimestamp();
             int processed = 0;
             while (shaderCursor < count)
             {
+                EffectDef? def = EffectCatalog.GetEffectDef((EffectIndex)shaderCursor);
+                if (def == null || !def.shouldPool)
+                {
+                    shaderCursor++;
+                    continue;
+                }
+
                 GameObject? prefab = prefabs[shaderCursor];
                 if (!prefab)
                 {
@@ -826,11 +911,12 @@ namespace ROR_O
                     prefabs[shaderCursor] = prefab;
                 }
 
+                int index = shaderCursor;
                 shaderCursor++;
                 processed++;
                 if (prefab)
                 {
-                    CollectShaderVariants(prefab!);
+                    CollectShaderVariants(prefab!, index);
                 }
 
                 // In play, compile this prefab now. Saving variants up for a batch of 24
@@ -864,40 +950,818 @@ namespace ROR_O
             LoadingProgress.Set("Effect shaders", shaderCursor, count, shaderCursor < count);
         }
 
-        private static void CollectShaderVariants(GameObject prefab)
+        private static bool ShadersWereEvicted()
+        {
+            for (int i = 0; i < pinnedShaders.Count; i++)
+            {
+                if (!pinnedShaders[i])
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static void ForgetShaderWarmup(bool releaseHolds)
+        {
+            if (releaseHolds)
+            {
+                ReleaseShaderHolds();
+            }
+
+            shaderVariantKeys.Clear();
+            shaderInfo.Clear();
+            pinnedShaders.Clear();
+            batchKeys.Clear();
+            variantMarks.Clear();
+            shaderTraceLines.Clear();
+            shaderCursor = 0;
+            shaderVariants = 0;
+            shaderBatch = null;
+            shaderBatchCount = 0;
+            shaderWarmCalls = 0;
+            shaderWarmMicroseconds = 0;
+            traceMisses = 0;
+            traceRecorded = 0;
+            traceCompiled = 0;
+            traceEmpty = 0;
+            traceUnloaded = 0;
+            traceNotPooled = 0;
+            traceRepeats = 0;
+            traceFogStamp = int.MinValue;
+            if (effectTrace.Length > 0)
+            {
+                System.Array.Clear(effectTrace, 0, effectTrace.Length);
+            }
+        }
+
+        private static void CollectShaderVariants(GameObject prefab, int index)
+        {
+            bool any = false;
+            Renderer[] renderers = prefab.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer renderer = renderers[i];
+                bool instancing = false;
+                Material? trail = null;
+                if (renderer is ParticleSystemRenderer particles)
+                {
+                    instancing = particles.enableGPUInstancing;
+                    trail = particles.trailMaterial;
+                }
+
+                Material[] materials = renderer.sharedMaterials ?? System.Array.Empty<Material>();
+
+                for (int j = 0; j < materials.Length; j++)
+                {
+                    any |= TryAddMaterial(materials[j], instancing);
+                }
+
+                if (trail && !MaterialsContain(materials, trail!))
+                {
+                    any |= TryAddMaterial(trail, instancing);
+                }
+            }
+
+            OmniEffect[] omnis = prefab.GetComponentsInChildren<OmniEffect>(true);
+            for (int i = 0; i < omnis.Length; i++)
+            {
+                OmniEffect.OmniEffectGroup[] groups = omnis[i].omniEffectGroups;
+                if (groups == null)
+                {
+                    continue;
+                }
+
+                for (int g = 0; g < groups.Length; g++)
+                {
+                    OmniEffect.OmniEffectElement[] elements = groups[g].omniEffectElements;
+                    if (elements == null)
+                    {
+                        continue;
+                    }
+
+                    for (int e = 0; e < elements.Length; e++)
+                    {
+                        OmniEffect.OmniEffectElement element = elements[e];
+                        if (element == null)
+                        {
+                            continue;
+                        }
+
+                        bool instancing = false;
+                        ParticleSystem system = element.particleSystem;
+                        if (system && system.TryGetComponent(out ParticleSystemRenderer particles))
+                        {
+                            instancing = particles.enableGPUInstancing;
+                        }
+
+                        any |= TryAddMaterial(element.particleSystemOverrideMaterial, instancing);
+                    }
+                }
+            }
+
+            AssignRandomMaterial[] picks = prefab.GetComponentsInChildren<AssignRandomMaterial>(true);
+            for (int i = 0; i < picks.Length; i++)
+            {
+                Material[] choices = picks[i].materials;
+                if (choices == null)
+                {
+                    continue;
+                }
+
+                bool instancing = picks[i].rend is ParticleSystemRenderer particles && particles.enableGPUInstancing;
+                for (int j = 0; j < choices.Length; j++)
+                {
+                    any |= TryAddMaterial(choices[j], instancing);
+                }
+            }
+
+            if (any)
+            {
+                HoldPrefab(index);
+            }
+        }
+
+        private static bool MaterialsContain(Material[] materials, Material trail)
+        {
+            for (int i = 0; i < materials.Length; i++)
+            {
+                if (materials[i] == trail)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryAddMaterial(Material? material, bool instancing)
+        {
+            if (!material)
+            {
+                return false;
+            }
+
+            Shader shader = material!.shader;
+            if (!shader)
+            {
+                return false;
+            }
+            ShaderWarmInfo info = InfoFor(shader);
+            FillScratch(material.shaderKeywords, info, instancing);
+            bool any = false;
+            PassType[] passes = info.Passes;
+            for (int i = 0; i < passes.Length; i++)
+            {
+                any |= SubmitSets(shader, info, passes[i]);
+            }
+
+            return any;
+        }
+
+        private static void FillScratch(string[] keywords, ShaderWarmInfo info, bool instancing)
+        {
+            FillKeywordList(keywordScratch, keywords, info, instancing);
+        }
+
+        private static void FillKeywordList(List<string> dest, string[]? keywords, ShaderWarmInfo info, bool instancing)
+        {
+            dest.Clear();
+            if (keywords != null)
+            {
+                for (int i = 0; i < keywords.Length; i++)
+                {
+                    string keyword = keywords[i];
+                    if (!string.IsNullOrEmpty(keyword) && !ListHas(dest, keyword))
+                    {
+                        dest.Add(keyword);
+                    }
+                }
+            }
+
+            if (instancing && info.Instancing && !ListHas(dest, "INSTANCING_ON"))
+            {
+                dest.Add("INSTANCING_ON");
+            }
+
+            if (QualitySettings.softParticles && info.SoftParticles && !ListHas(dest, "SOFTPARTICLES_ON"))
+            {
+                dest.Add("SOFTPARTICLES_ON");
+            }
+        }
+
+        private static bool ScratchHas(string keyword)
+        {
+            return ListHas(keywordScratch, keyword);
+        }
+
+        private static bool ListHas(List<string> list, string keyword)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i] == keyword)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool SubmitSets(Shader shader, ShaderWarmInfo info, PassType pass)
+        {
+            bool directional = pass == PassType.ForwardBase && info.Directional && !ScratchHas("DIRECTIONAL");
+            bool any = SubmitOne(shader, info, pass, false, null);
+            if (directional)
+            {
+                any |= SubmitOne(shader, info, pass, true, null);
+            }
+
+            string[] fog = info.Fog;
+            for (int i = 0; i < fog.Length; i++)
+            {
+                if (ScratchHas(fog[i]))
+                {
+                    continue;
+                }
+
+                any |= SubmitOne(shader, info, pass, false, fog[i]);
+                if (directional)
+                {
+                    any |= SubmitOne(shader, info, pass, true, fog[i]);
+                }
+            }
+
+            return any;
+        }
+
+        private static bool SubmitOne(Shader shader, ShaderWarmInfo info, PassType pass, bool directional, string? fog)
+        {
+            keywordCombo.Clear();
+            for (int i = 0; i < keywordScratch.Count; i++)
+            {
+                keywordCombo.Add(keywordScratch[i]);
+            }
+
+            if (directional)
+            {
+                keywordCombo.Add("DIRECTIONAL");
+                if (info.LightProbe && !ScratchHas("LIGHTPROBE_SH"))
+                {
+                    keywordCombo.Add("LIGHTPROBE_SH");
+                }
+            }
+
+            if (!string.IsNullOrEmpty(fog))
+            {
+                keywordCombo.Add(fog!);
+            }
+
+            keywordCombo.Sort(System.StringComparer.Ordinal);
+            string key = WriteVariantKey(variantKey, shader, pass, keywordCombo);
+            if (!shaderVariantKeys.Add(key))
+            {
+                return false;
+            }
+
+            shaderBatch ??= new ShaderVariantCollection();
+            int before = shaderBatch.variantCount;
+            shaderBatch.Add(new ShaderVariantCollection.ShaderVariant(shader, pass, keywordCombo.ToArray()));
+            if (shaderBatch.variantCount <= before)
+            {
+                return false;
+            }
+
+            batchKeys.Add(key);
+            shaderBatchCount++;
+            shaderVariants++;
+            RememberShader(shader);
+            return true;
+        }
+
+        private static string WriteVariantKey(StringBuilder key, Shader shader, PassType pass, List<string> keywords)
+        {
+            key.Clear();
+            key.Append(shader.GetInstanceID());
+            key.Append('|');
+            key.Append((int)pass);
+            for (int i = 0; i < keywords.Count; i++)
+            {
+                key.Append('|');
+                key.Append(keywords[i]);
+            }
+
+            return key.ToString();
+        }
+
+        private static void RememberShader(Shader shader)
+        {
+            for (int i = 0; i < pinnedShaders.Count; i++)
+            {
+                Shader pinned = pinnedShaders[i];
+                if (pinned && pinned.GetInstanceID() == shader.GetInstanceID())
+                {
+                    return;
+                }
+            }
+
+            pinnedShaders.Add(shader);
+        }
+
+        private static ShaderWarmInfo InfoFor(Shader shader)
+        {
+            int id = shader.GetInstanceID();
+            if (shaderInfo.TryGetValue(id, out ShaderWarmInfo? info) && info != null)
+            {
+                return info;
+            }
+
+            info = BuildShaderWarmInfo(shader);
+            shaderInfo[id] = info;
+            return info;
+        }
+
+        private static ShaderWarmInfo BuildShaderWarmInfo(Shader shader)
+        {
+            string[] names = shader.keywordSpace.keywordNames;
+            HashSet<string> declared = names == null
+                ? new HashSet<string>(System.StringComparer.Ordinal)
+                : new HashSet<string>(names, System.StringComparer.Ordinal);
+            passScratch.Clear();
+            int passCount = shader.passCount;
+            if (!lightModeTagReady)
+            {
+                lightModeTag = new ShaderTagId("LightMode");
+                lightModeTagReady = true;
+            }
+
+            for (int i = 0; i < passCount; i++)
+            {
+                string mode = shader.FindPassTagValue(i, lightModeTag).name;
+                if (!TryMapPass(mode, out PassType pass) || passScratch.Contains(pass))
+                {
+                    continue;
+                }
+
+                passScratch.Add(pass);
+            }
+
+            if (passScratch.Count == 0)
+            {
+                passScratch.Add(PassType.Normal);
+            }
+
+            int fogCount = 0;
+            for (int i = 0; i < FogKeywordNames.Length; i++)
+            {
+                if (declared.Contains(FogKeywordNames[i]))
+                {
+                    fogCount++;
+                }
+            }
+
+            string[] fog = new string[fogCount];
+            int fogIndex = 0;
+            for (int i = 0; i < FogKeywordNames.Length; i++)
+            {
+                if (declared.Contains(FogKeywordNames[i]))
+                {
+                    fog[fogIndex++] = FogKeywordNames[i];
+                }
+            }
+
+            return new ShaderWarmInfo
+            {
+                Passes = passScratch.ToArray(),
+                SoftParticles = declared.Contains("SOFTPARTICLES_ON"),
+                Instancing = declared.Contains("INSTANCING_ON"),
+                Directional = declared.Contains("DIRECTIONAL"),
+                LightProbe = declared.Contains("LIGHTPROBE_SH"),
+                Fog = fog
+            };
+        }
+
+        private static bool TryMapPass(string mode, out PassType pass)
+        {
+            if (string.IsNullOrEmpty(mode) || mode == "Always" || mode == "ALWAYS")
+            {
+                pass = PassType.Normal;
+                return true;
+            }
+
+            if (mode == "ForwardBase")
+            {
+                pass = PassType.ForwardBase;
+                return true;
+            }
+
+            pass = PassType.Normal;
+            return false;
+        }
+
+        // One extra ref per prefab that introduced a shader. The run pin is released on run end
+        // (immediately for direct loads, 12 seconds later for OnRunEnd). This ref is what keeps
+        // the shader object, and the GPU programs on it, loaded for the rest of the process.
+        private static void HoldPrefab(int index)
+        {
+            if (index < 0 || index >= shaderHeld.Length || shaderHeld[index])
+            {
+                return;
+            }
+
+            AssetReferenceT<GameObject>? address = addresses[index];
+            if (address != null && address.RuntimeKeyIsValid())
+            {
+                try
+                {
+                    AsyncOperationHandle<GameObject> handle = Addressables.LoadAssetAsync<GameObject>(address);
+                    if (!handle.IsValid())
+                    {
+                        return;
+                    }
+
+                    shaderHolds.Add(handle);
+                    shaderHeld[index] = true;
+                    return;
+                }
+                catch (System.Exception exception)
+                {
+                    RORO.GlobalLogger?.LogWarning($"Effect shader hold did not start: {exception.Message}");
+                    return;
+                }
+            }
+
+            GameObject? prefab = prefabs[index];
+            if (!prefab)
+            {
+                return;
+            }
+
+            shaderHoldPrefabs.Add(prefab!);
+            shaderHeld[index] = true;
+        }
+
+        private static void ReleaseShaderHolds()
+        {
+            for (int i = 0; i < shaderHolds.Count; i++)
+            {
+                AsyncOperationHandle<GameObject> handle = shaderHolds[i];
+                if (handle.IsValid())
+                {
+                    Addressables.Release(handle);
+                }
+            }
+
+            shaderHolds.Clear();
+            shaderHoldPrefabs.Clear();
+            if (shaderHeld.Length > 0)
+            {
+                System.Array.Clear(shaderHeld, 0, shaderHeld.Length);
+            }
+        }
+
+        private sealed class ShaderWarmInfo
+        {
+            internal PassType[] Passes = System.Array.Empty<PassType>();
+            internal bool SoftParticles;
+            internal bool Instancing;
+            internal bool Directional;
+            internal bool LightProbe;
+            internal string[] Fog = System.Array.Empty<string>();
+        }
+
+        private struct WarmBatchMark
+        {
+            internal int Microseconds;
+            internal int Variants;
+        }
+
+        private static void TraceSpawn(int index)
+        {
+            int stamp = FogStamp();
+            if (stamp != traceFogStamp)
+            {
+                // Fog and soft particles pick the variant the next draw uses. Counts are for
+                // the current pair only, so a stage with different fog does not keep the old verdict.
+                traceFogStamp = stamp;
+                traceMisses = 0;
+                traceRecorded = 0;
+                traceCompiled = 0;
+                traceEmpty = 0;
+                traceUnloaded = 0;
+                traceNotPooled = 0;
+                traceRepeats = 0;
+                shaderTraceLines.Clear();
+                if (effectTrace.Length > 0)
+                {
+                    System.Array.Clear(effectTrace, 0, effectTrace.Length);
+                }
+            }
+
+            if (index < 0 || index >= effectTrace.Length)
+            {
+                return;
+            }
+
+            if (effectTrace[index] != 0)
+            {
+                traceRepeats++;
+                return;
+            }
+
+            EffectDef? def = EffectCatalog.GetEffectDef((EffectIndex)index);
+            string name = def != null && !string.IsNullOrEmpty(def.prefabName) ? def.prefabName : index.ToString();
+            if (def == null || !def.shouldPool)
+            {
+                effectTrace[index] = 5;
+                traceNotPooled++;
+                return;
+            }
+
+            GameObject? prefab = prefabs[index];
+            if (!prefab)
+            {
+                effectTrace[index] = 4;
+                traceUnloaded++;
+                PushTraceLine("нет префаба  " + name);
+                return;
+            }
+
+            int worst = 3;
+            bool any = false;
+            RankPrefab(prefab!, name, ref worst, ref any);
+            if (!any)
+            {
+                effectTrace[index] = 6;
+                traceEmpty++;
+                return;
+            }
+
+            if (worst == 1)
+            {
+                effectTrace[index] = 1;
+                traceMisses++;
+                return;
+            }
+
+            if (worst == 2)
+            {
+                effectTrace[index] = 2;
+                traceRecorded++;
+                return;
+            }
+
+            effectTrace[index] = 3;
+            traceCompiled++;
+        }
+
+        private static int FogStamp()
+        {
+            int stamp = RenderSettings.fog ? 1 : 0;
+            stamp |= ((int)RenderSettings.fogMode) << 1;
+            if (QualitySettings.softParticles)
+            {
+                stamp |= 32;
+            }
+
+            return stamp;
+        }
+
+        private static void RankPrefab(GameObject prefab, string effectName, ref int worst, ref bool any)
         {
             Renderer[] renderers = prefab.GetComponentsInChildren<Renderer>(true);
             for (int i = 0; i < renderers.Length; i++)
             {
-                Material[] materials = renderers[i].sharedMaterials;
+                Renderer renderer = renderers[i];
+                bool instancing = false;
+                Material? trail = null;
+                if (renderer is ParticleSystemRenderer particles)
+                {
+                    instancing = particles.enableGPUInstancing;
+                    trail = particles.trailMaterial;
+                }
+
+                Material[] materials = renderer.sharedMaterials ?? System.Array.Empty<Material>();
                 for (int j = 0; j < materials.Length; j++)
                 {
-                    Material? material = materials[j];
-                    if (!material || !material.shader)
+                    RankMaterial(materials[j], instancing, effectName, ref worst, ref any);
+                }
+
+                if (trail && !MaterialsContain(materials, trail!))
+                {
+                    RankMaterial(trail, instancing, effectName, ref worst, ref any);
+                }
+            }
+
+            OmniEffect[] omnis = prefab.GetComponentsInChildren<OmniEffect>(true);
+            for (int i = 0; i < omnis.Length; i++)
+            {
+                OmniEffect.OmniEffectGroup[] groups = omnis[i].omniEffectGroups;
+                if (groups == null)
+                {
+                    continue;
+                }
+
+                for (int g = 0; g < groups.Length; g++)
+                {
+                    OmniEffect.OmniEffectElement[] elements = groups[g].omniEffectElements;
+                    if (elements == null)
                     {
                         continue;
                     }
 
-                    string[] keywords = material.shaderKeywords;
-                    string key = material.shader.name + "|" + string.Join(",", keywords);
-                    if (!shaderVariantKeys.Add(key))
+                    for (int e = 0; e < elements.Length; e++)
                     {
-                        continue;
-                    }
+                        OmniEffect.OmniEffectElement element = elements[e];
+                        if (element == null)
+                        {
+                            continue;
+                        }
 
-                    shaderBatch ??= new ShaderVariantCollection();
-                    try
-                    {
-                        shaderBatch.Add(new ShaderVariantCollection.ShaderVariant(material.shader, UnityEngine.Rendering.PassType.Normal, keywords));
-                        shaderBatchCount++;
-                        shaderVariants++;
-                    }
-                    catch (System.Exception)
-                    {
-                        // Not a combination this shader accepts. The first real spawn
-                        // compiles what it actually needs.
+                        bool instancing = false;
+                        ParticleSystem system = element.particleSystem;
+                        if (system && system.TryGetComponent(out ParticleSystemRenderer particles))
+                        {
+                            instancing = particles.enableGPUInstancing;
+                        }
+
+                        RankMaterial(element.particleSystemOverrideMaterial, instancing, effectName, ref worst, ref any);
                     }
                 }
+            }
+
+            AssignRandomMaterial[] picks = prefab.GetComponentsInChildren<AssignRandomMaterial>(true);
+            for (int i = 0; i < picks.Length; i++)
+            {
+                Material[] choices = picks[i].materials;
+                if (choices == null)
+                {
+                    continue;
+                }
+
+                bool instancing = picks[i].rend is ParticleSystemRenderer particles && particles.enableGPUInstancing;
+                for (int j = 0; j < choices.Length; j++)
+                {
+                    RankMaterial(choices[j], instancing, effectName, ref worst, ref any);
+                }
+            }
+        }
+
+        private static void RankMaterial(Material? material, bool instancing, string effectName, ref int worst, ref bool any)
+        {
+            if (!material)
+            {
+                return;
+            }
+
+            Shader shader = material!.shader;
+            if (!shader)
+            {
+                return;
+            }
+
+            any = true;
+            ShaderWarmInfo info = InfoFor(shader);
+            FillKeywordList(traceScratch, material.shaderKeywords, info, instancing);
+            PassType[] passes = info.Passes;
+            for (int i = 0; i < passes.Length; i++)
+            {
+                int rank = RankPass(shader, info, passes[i], effectName);
+                if (rank < worst)
+                {
+                    worst = rank;
+                }
+            }
+        }
+
+        // 1 = the draw's variant is not in a warmed collection.
+        // 2 = it is in a collection, but this batch's WarmUp was not a single measured compile.
+        // 3 = the collection held only this variant, and WarmUp took at least a millisecond.
+        private static int RankPass(Shader shader, ShaderWarmInfo info, PassType pass, string effectName)
+        {
+            CopyTraceCombo(info, pass);
+            traceCombo.Sort(System.StringComparer.Ordinal);
+            string key = WriteVariantKey(traceKey, shader, pass, traceCombo);
+            if (!CollectionContains(shader, pass))
+            {
+                PushTraceLine("промах  " + effectName + "  " + shader.name + "  " + pass + "  " + JoinCombo());
+                return 1;
+            }
+
+            if (variantMarks.TryGetValue(key, out WarmBatchMark mark) && mark.Variants == 1 && mark.Microseconds >= 1000)
+            {
+                PushTraceLine("сборка  " + effectName + "  " + shader.name + "  " + mark.Microseconds + " мкс");
+                return 3;
+            }
+
+            return 2;
+        }
+
+        private static void CopyTraceCombo(ShaderWarmInfo info, PassType pass)
+        {
+            traceCombo.Clear();
+            for (int i = 0; i < traceScratch.Count; i++)
+            {
+                traceCombo.Add(traceScratch[i]);
+            }
+
+            if (pass == PassType.ForwardBase && info.Directional && !ListHas(traceScratch, "DIRECTIONAL"))
+            {
+                traceCombo.Add("DIRECTIONAL");
+                if (info.LightProbe && !ListHas(traceScratch, "LIGHTPROBE_SH"))
+                {
+                    traceCombo.Add("LIGHTPROBE_SH");
+                }
+            }
+
+            string? fog = ActiveFogKeyword(info);
+            if (!string.IsNullOrEmpty(fog) && !ListHas(traceScratch, fog!))
+            {
+                traceCombo.Add(fog!);
+            }
+        }
+
+        private static string? ActiveFogKeyword(ShaderWarmInfo info)
+        {
+            if (!RenderSettings.fog)
+            {
+                return null;
+            }
+
+            string? name = null;
+            if (RenderSettings.fogMode == FogMode.Linear)
+            {
+                name = "FOG_LINEAR";
+            }
+            else if (RenderSettings.fogMode == FogMode.Exponential)
+            {
+                name = "FOG_EXP";
+            }
+            else if (RenderSettings.fogMode == FogMode.ExponentialSquared)
+            {
+                name = "FOG_EXP2";
+            }
+
+            if (name == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < info.Fog.Length; i++)
+            {
+                if (info.Fog[i] == name)
+                {
+                    return name;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool CollectionContains(Shader shader, PassType pass)
+        {
+            string[] keywords = traceCombo.ToArray();
+            ShaderVariantCollection.ShaderVariant variant = new ShaderVariantCollection.ShaderVariant(shader, pass, keywords);
+            for (int i = 0; i < shaderCollections.Count; i++)
+            {
+                ShaderVariantCollection collection = shaderCollections[i];
+                if (collection && collection.Contains(variant))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string JoinCombo()
+        {
+            if (traceCombo.Count == 0)
+            {
+                return "без слов";
+            }
+
+            traceKey.Clear();
+            for (int i = 0; i < traceCombo.Count; i++)
+            {
+                if (i > 0)
+                {
+                    traceKey.Append(' ');
+                }
+
+                traceKey.Append(traceCombo[i]);
+            }
+
+            return traceKey.ToString();
+        }
+
+        private static void PushTraceLine(string line)
+        {
+            shaderTraceLines.Insert(0, line);
+            if (shaderTraceLines.Count > 6)
+            {
+                shaderTraceLines.RemoveAt(6);
             }
         }
 
@@ -910,18 +1774,41 @@ namespace ROR_O
                 return;
             }
 
+            int variants = shaderBatchCount;
+            bool warmed = false;
+            int microseconds = 0;
             try
             {
-                // WarmUp runs on this thread and does not return until the variants are compiled.
+                // WarmUp runs on this thread and does not return until the call is done.
                 // Unity 2021.3 has no background compile, and this call is not safe off the main thread.
+                // A return in tens of microseconds is a lookup, not a driver compile.
+                long started = Stopwatch.GetTimestamp();
                 shaderBatch.WarmUp();
+                microseconds = (int)((Stopwatch.GetTimestamp() - started) * 1000000d / Stopwatch.Frequency);
                 shaderCollections.Add(shaderBatch);
+                warmed = true;
             }
             catch (System.Exception exception)
             {
                 RORO.GlobalLogger?.LogWarning($"Effect shader warmup batch failed: {exception.Message}");
             }
 
+            if (warmed)
+            {
+                shaderWarmCalls++;
+                shaderWarmMicroseconds += microseconds;
+                WarmBatchMark mark = new WarmBatchMark
+                {
+                    Microseconds = microseconds,
+                    Variants = variants
+                };
+                for (int i = 0; i < batchKeys.Count; i++)
+                {
+                    variantMarks[batchKeys[i]] = mark;
+                }
+            }
+
+            batchKeys.Clear();
             shaderBatch = null;
             shaderBatchCount = 0;
         }
@@ -1308,6 +2195,65 @@ namespace ROR_O
             statusBuilder.Append("\nPools ").Append(pools).Append("  idle ").Append(idle).Append("  in use ").Append(inUse);
             statusBuilder.Append("\nLive ").Append(VFXAttributes.readonlyVFXList.Count).Append("  secondary culled ").Append(culledEffects);
             statusText = statusBuilder.ToString();
+        }
+
+        private static void RefreshShaderStatus()
+        {
+            int live = 0;
+            for (int i = 0; i < pinnedShaders.Count; i++)
+            {
+                if (pinnedShaders[i])
+                {
+                    live++;
+                }
+            }
+
+            int stored = 0;
+            for (int i = 0; i < shaderCollections.Count; i++)
+            {
+                ShaderVariantCollection collection = shaderCollections[i];
+                if (collection)
+                {
+                    stored += collection.variantCount;
+                }
+            }
+
+            statusBuilder.Clear();
+            statusBuilder.Append(warmShaders?.Value == true ? "Шейдеры эффектов: прогрев включён" : "Шейдеры эффектов: прогрев выключен");
+            statusBuilder.Append("\nКурсор ").Append(shaderCursor).Append('/').Append(prefabs.Length);
+            statusBuilder.Append("  в коллекциях ").Append(stored);
+            statusBuilder.Append("  WarmUp ").Append(shaderWarmCalls).Append(" вызовов, ");
+            AppendMicros(statusBuilder, shaderWarmMicroseconds);
+            statusBuilder.Append("\nЖивые шейдеры ").Append(live).Append('/').Append(pinnedShaders.Count);
+            statusBuilder.Append("  удержано префабов ").Append(shaderHolds.Count + shaderHoldPrefabs.Count);
+            statusBuilder.Append("\nСпавны: промах ").Append(traceMisses);
+            statusBuilder.Append("  записан ").Append(traceRecorded);
+            statusBuilder.Append("  сборка одного варианта ").Append(traceCompiled);
+            statusBuilder.Append("  повтор ").Append(traceRepeats);
+            statusBuilder.Append("\nБез рендера ").Append(traceEmpty);
+            statusBuilder.Append("  нет префаба ").Append(traceUnloaded);
+            statusBuilder.Append("  не из пула ").Append(traceNotPooled);
+            statusBuilder.Append("\nПопадание — вариант текущего тумана, мягких частиц и инстансинга есть в коллекции после WarmUp.");
+            statusBuilder.Append("\nРелизный DX11 не пишет Shader.CreateGPUProgram. Короткий WarmUp — не сборка драйвера.");
+            for (int i = 0; i < shaderTraceLines.Count; i++)
+            {
+                statusBuilder.Append('\n').Append(shaderTraceLines[i]);
+            }
+
+            shaderStatusText = statusBuilder.ToString();
+        }
+
+        private static void AppendMicros(StringBuilder builder, long microseconds)
+        {
+            if (microseconds >= 1000)
+            {
+                builder.Append((microseconds / 1000d).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
+                builder.Append(" мс");
+                return;
+            }
+
+            builder.Append(microseconds);
+            builder.Append(" мкс");
         }
 
         private static int Clamp(int value, int min, int max)

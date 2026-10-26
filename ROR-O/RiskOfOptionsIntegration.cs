@@ -65,6 +65,7 @@ namespace ROR_O
         public ConfigEntry<bool>? CullEffectsOffScreen { get; set; }
         public ConfigEntry<int>? EffectCullInterval { get; set; }
         public ConfigEntry<bool>? ShowEffectStatus { get; set; }
+        public ConfigEntry<bool>? ShowShaderStatus { get; set; }
         public ConfigEntry<bool>? LogEffectStatus { get; set; }
         public ConfigEntry<bool>? EnableHitchWatch { get; set; }
         public ConfigEntry<int>? HitchWatchTargetFps { get; set; }
@@ -209,6 +210,7 @@ namespace ROR_O
             menu.CheckBox(catalog.CullEffectsOffScreen, effectCullOff);
             menu.IntSlider(catalog.EffectCullInterval, 1, 20, effectCullOff);
             menu.CheckBox(catalog.ShowEffectStatus);
+            menu.CheckBox(catalog.ShowShaderStatus, null, "Show Shader Compile");
             menu.CheckBox(catalog.LogEffectStatus);
 
             menu.CheckBox(catalog.EnableHitchWatch);

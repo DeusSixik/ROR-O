@@ -334,6 +334,7 @@ namespace ROR_O
                 CullEffectsOffScreen = EffectRuntime.CullOffScreenEntry,
                 EffectCullInterval = EffectRuntime.CullIntervalEntry,
                 ShowEffectStatus = EffectRuntime.ShowStatusEntry,
+                ShowShaderStatus = EffectRuntime.ShowShaderStatusEntry,
                 LogEffectStatus = EffectRuntime.LogStatusEntry,
             });
         }
