@@ -197,7 +197,7 @@ namespace ROR_O
             menu.CheckBox(catalog.EnableEffectWarmup);
             menu.CheckBox(catalog.KeepEffectPools);
             menu.CheckBox(catalog.KeepEffectCopiesActive, null, "<color=#FFDD44>[Experimental]</color> Keep Effect Copies Active");
-            menu.IntSlider(catalog.ActiveParkLimit, 0, 512, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Active Parked Copies");
+            menu.IntSlider(catalog.ActiveParkLimit, 0, 192, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Active Parked Copies");
             menu.CheckBox(catalog.WarmFullPeak, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm Full Observed Peak");
             menu.CheckBox(catalog.WarmShaders, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm Effect Shaders");
             menu.IntSlider(catalog.WarmPeakCopies, 0, 20, effectWarmupOff);

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Text;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
@@ -23,10 +24,14 @@ namespace ROR_O
         private static readonly ConditionalWeakTable<EffectManagerHelper, ParkedCopy> Parked = new ConditionalWeakTable<EffectManagerHelper, ParkedCopy>();
         private static readonly Dictionary<GameObject, int> SpawnCounts = new Dictionary<GameObject, int>();
         private static int activeParked;
+        private static readonly List<EffectManagerHelper> activeParkList = new List<EffectManagerHelper>();
+        private static int parkDepth;
 
-        // A copy parked active keeps every script on it ticking, so only effects that spawn
-        // often earn it, and only up to a global cap. The rest deactivate as the game does.
-        private const int HotSpawnThreshold = 12;
+        // DestroyOnTimer and DestroyOnParticleEnd call ReturnObject while the root is still
+        // active, so a parked copy can skip the next SetActive. One spawn must not take a
+        // slot: a one-shot would sit there all stage. The second return is the first that
+        // can pay the following spawn back. The cap still bounds how many keep ticking.
+        private const int HotSpawnThreshold = 2;
 
         internal static void NotePrefabSpawn(GameObject? prefab)
         {
@@ -39,15 +44,45 @@ namespace ROR_O
             SpawnCounts[prefab] = count + 1;
         }
 
+        private static int parkKept;
+        private static int parkUncounted;
+        private static int parkCold;
+        private static int parkCap;
+        private static int parkInactive;
+        private static int parkFull;
+        private static int parkPushFailed;
+        private static int parkEvicted;
+
         internal static void ResetParkedActive()
         {
             activeParked = 0;
             SpawnCounts.Clear();
+            parkKept = 0;
+            parkUncounted = 0;
+            parkCold = 0;
+            parkCap = 0;
+            parkInactive = 0;
+            parkFull = 0;
+            parkPushFailed = 0;
+            parkEvicted = 0;
+            activeParkList.Clear();
+        }
+
+        internal static void AppendParkReport(StringBuilder builder)
+        {
+            builder.Append("\nСтоянка сейчас ").Append(activeParked);
+            builder.Append("  включена ").Append(parkKept);
+            builder.Append("  нет счётчика ").Append(parkUncounted);
+            builder.Append("  ещё <").Append(HotSpawnThreshold).Append(' ').Append(parkCold);
+            builder.Append("  потолок ").Append(parkCap);
+            builder.Append("  уже выключен ").Append(parkInactive);
+            builder.Append("  пул полон ").Append(parkFull);
+            builder.Append("  не влезла ").Append(parkPushFailed);
+            builder.Append("  вытеснена ").Append(parkEvicted);
         }
         private static readonly FieldInfo? TrailField = AccessTools.Field(typeof(EffectManagerHelper), "_TrailRenderers");
         private static readonly FieldInfo? VfxField = AccessTools.Field(typeof(EffectManagerHelper), "_vfxAttributes");
         private static readonly FieldInfo? OmniField = AccessTools.Field(typeof(EffectManagerHelper), "_OmniEffects");
-        private static readonly FieldInfo? DestroyTimerField = AccessTools.Field(typeof(EffectManagerHelper), "_destroyOnTimer");
         private static readonly FieldInfo? PoolCapacityField = AccessTools.Field(typeof(EffectPool), "poolCapacity");
         private static readonly FieldInfo? OrphanField = AccessTools.Field(typeof(EffectPool), "_OrphanedEffects");
         private static readonly FieldInfo? InUseField = FindPoolField("_InUse");
@@ -150,6 +185,16 @@ namespace ROR_O
                 }
 
                 harmony.Patch(method, postfix: new HarmonyMethod(typeof(EffectPools), nameof(WakeParkedCopy)));
+            }
+
+            foreach (MethodInfo method in typeof(EffectManager).GetMethods(BindingFlags.Public | BindingFlags.Static))
+            {
+                if (method.Name != nameof(EffectManager.GetAndActivatePooledEffect))
+                {
+                    continue;
+                }
+
+                harmony.Patch(method, transpiler: new HarmonyMethod(typeof(EffectPools), nameof(SkipSameActiveState)));
             }
 
             MethodInfo? postActivate = AccessTools.Method(typeof(EffectManagerHelper), nameof(EffectManagerHelper.ResetPostActivate));
@@ -432,7 +477,7 @@ namespace ROR_O
                 RORO.GlobalLogger?.LogInfo("Effect spawn stores its data copy directly.");
             }
 
-            return UseCachedEffectComponent(list);
+            return SkipSameActiveState(UseCachedEffectComponent(list));
         }
 
         // GetPooledEffect already ran Initialize, which stored this copy's EffectComponent.
@@ -539,6 +584,51 @@ namespace ROR_O
             return output;
         }
 
+        // SpawnEffect and GetAndActivatePooledEffect always call SetActive(true) after Reset.
+        // A copy that stayed active is already in that state, and the call would enter native
+        // SetActive only to find nothing to change.
+        private static IEnumerable<CodeInstruction> SkipSameActiveState(IEnumerable<CodeInstruction> instructions)
+        {
+            MethodInfo? setActive = AccessTools.Method(typeof(GameObject), nameof(GameObject.SetActive), new[] { typeof(bool) });
+            MethodInfo? redirect = AccessTools.Method(typeof(EffectPools), nameof(ActivateIfChanged));
+            if (setActive == null || redirect == null)
+            {
+                RORO.GlobalLogger?.LogWarning("Effect activation still calls SetActive when the copy is already active.");
+                return instructions;
+            }
+
+            List<CodeInstruction> list = instructions as List<CodeInstruction> ?? new List<CodeInstruction>(instructions);
+            int replaced = 0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (!list[i].Calls(setActive))
+                {
+                    continue;
+                }
+
+                list[i].opcode = OpCodes.Call;
+                list[i].operand = redirect;
+                replaced++;
+            }
+
+            if (replaced == 0)
+            {
+                RORO.GlobalLogger?.LogWarning("Effect activation still calls SetActive when the copy is already active.");
+            }
+
+            return list;
+        }
+
+        private static void ActivateIfChanged(GameObject gameObject, bool value)
+        {
+            if (!gameObject || gameObject.activeSelf == value)
+            {
+                return;
+            }
+
+            gameObject.SetActive(value);
+        }
+
         // Wwise resolves a name to a stable id. SpawnEffect casts the effect sound and the surface
         // sound on every copy, and each cast marshals the string into the native sound engine.
         private static bool RememberSoundId(string eventName, ref AkEventIdArg __result)
@@ -566,17 +656,31 @@ namespace ROR_O
         // itself instead of calling the deactivate.
         private static bool ParkInsteadOfDeactivate(EffectPool __instance, EffectManagerHelper inReturnObject)
         {
-            if (!EffectRuntime.KeepCopiesActive || !inReturnObject)
+            if (!EffectRuntime.KeepCopiesActive || !inReturnObject || parkDepth > 0)
             {
                 return true;
             }
 
             // Keeping every idle copy active taxed every frame for a saving that only
             // frequent spawns repay. Cold effects and a full cap fall back to deactivation.
+            // The count has to be on this pool's prefab: SpawnEffect created the pool with
+            // EffectDef.prefab, and a pin of the same address can be a different object.
             GameObject? prefab = __instance.PrefabObject;
-            if (!prefab || activeParked >= EffectRuntime.ActiveParkLimit
-                || !SpawnCounts.TryGetValue(prefab, out int spawns) || spawns < HotSpawnThreshold)
+            if (!prefab || !SpawnCounts.TryGetValue(prefab, out int spawns))
             {
+                parkUncounted++;
+                return true;
+            }
+
+            if (spawns < HotSpawnThreshold)
+            {
+                parkCold++;
+                return true;
+            }
+
+            if (activeParked >= EffectRuntime.ActiveParkLimit && !ReleaseColderPark(spawns))
+            {
+                parkCap++;
                 return true;
             }
 
@@ -595,27 +699,104 @@ namespace ROR_O
             EffectPool? owning = inReturnObject.OwningPool;
             if (owning != null && owning.PoolCount() >= capacity)
             {
+                parkFull++;
                 UnityEngine.Object.Destroy(inReturnObject.gameObject);
                 return false;
             }
 
-            ParkActiveCopy(inReturnObject);
+            bool rewound = ParkActiveCopy(inReturnObject);
+            if (!rewound)
+            {
+                parkInactive++;
+            }
+
             if (!PushIdle(__instance, inReturnObject))
             {
+                parkPushFailed++;
                 RORO.GlobalLogger?.LogWarning($"Active effect pool could not park {inReturnObject.name}; it was deactivated.");
                 inReturnObject.gameObject.SetActive(false);
                 PushIdle(__instance, inReturnObject);
                 return false;
             }
 
-            if (inReturnObject.gameObject.activeSelf
+            if (rewound
+                && inReturnObject.gameObject.activeSelf
                 && Parked.TryGetValue(inReturnObject, out ParkedCopy? parked) && parked != null && parked.Hidden)
             {
                 activeParked++;
                 parked.Counted = true;
+                parked.HotSpawns = spawns;
+                parkKept++;
+                if (!activeParkList.Contains(inReturnObject))
+                {
+                    activeParkList.Add(inReturnObject);
+                }
             }
 
             return false;
+        }
+
+        // The cap is full of copies that have already spawned twice. A hotter effect takes
+        // the slot: the colder copy is deactivated once, and the shots that keep coming
+        // stay active. SetActive here can re-enter the return, which must take the game's path.
+        private static bool ReleaseColderPark(int spawns)
+        {
+            int coldest = -1;
+            int coldCount = int.MaxValue;
+            for (int i = activeParkList.Count - 1; i >= 0; i--)
+            {
+                EffectManagerHelper helper = activeParkList[i];
+                if (!helper)
+                {
+                    activeParkList.RemoveAt(i);
+                    continue;
+                }
+
+                if (!Parked.TryGetValue(helper, out ParkedCopy? parked) || parked == null || !parked.Counted)
+                {
+                    continue;
+                }
+
+                if (parked.HotSpawns < coldCount)
+                {
+                    coldCount = parked.HotSpawns;
+                    coldest = i;
+                }
+            }
+
+            if (coldest < 0 || coldCount >= spawns)
+            {
+                return false;
+            }
+
+            EffectManagerHelper victim = activeParkList[coldest];
+            activeParkList.RemoveAt(coldest);
+            if (Parked.TryGetValue(victim, out ParkedCopy? copy) && copy != null)
+            {
+                RestoreParked(victim, copy);
+                copy.Counted = false;
+            }
+
+            if (activeParked > 0)
+            {
+                activeParked--;
+            }
+
+            parkEvicted++;
+            if (victim && victim.gameObject.activeSelf)
+            {
+                parkDepth++;
+                try
+                {
+                    victim.gameObject.SetActive(false);
+                }
+                finally
+                {
+                    parkDepth--;
+                }
+            }
+
+            return true;
         }
 
         private static bool PushIdle(EffectPool pool, EffectManagerHelper helper)
@@ -665,7 +846,8 @@ namespace ROR_O
             return AccessTools.PropertySetter(open.MakeGenericType(typeof(EffectManagerHelper)), "timestamp");
         }
 
-        private static void ParkActiveCopy(EffectManagerHelper helper)
+        // False means the root was already inactive, so this return cannot skip the next SetActive.
+        private static bool ParkActiveCopy(EffectManagerHelper helper)
         {
             GameObject copy = helper.gameObject;
             // A copy created inactive has not run Start. Turning it on here runs Start
@@ -673,12 +855,12 @@ namespace ROR_O
             // spawn activates it after the data is in place.
             if (!copy.activeSelf)
             {
-                return;
+                return false;
             }
 
             helper.StopAllParticleSystems(true);
             StopOmniSystems(helper);
-            ParkDestroyTimer(helper);
+            SilenceLifetime(helper);
             HideRenderers(helper);
             HideLights(helper);
             ClearTrails(helper);
@@ -692,6 +874,8 @@ namespace ROR_O
             {
                 attributes.enabled = false;
             }
+
+            return true;
         }
 
         internal static void WakeParkedCopy(EffectManagerHelper __result)
@@ -708,6 +892,21 @@ namespace ROR_O
                 return;
             }
 
+            RestoreParked(__result, parked);
+            parked.NeedsOmniPlay = true;
+            if (parked.Counted)
+            {
+                parked.Counted = false;
+                activeParkList.Remove(__result);
+                if (activeParked > 0)
+                {
+                    activeParked--;
+                }
+            }
+        }
+
+        private static void RestoreParked(EffectManagerHelper helper, ParkedCopy parked)
+        {
             Renderer[] renderers = parked.Renderers;
             bool[] wasEnabled = parked.WasEnabled;
             int count = renderers.Length < wasEnabled.Length ? renderers.Length : wasEnabled.Length;
@@ -733,18 +932,8 @@ namespace ROR_O
             }
 
             parked.Hidden = false;
-            parked.NeedsOmniPlay = true;
-            if (parked.Counted)
-            {
-                parked.Counted = false;
-                if (activeParked > 0)
-                {
-                    activeParked--;
-                }
-            }
-
-            RestoreDestroyTimer(__result);
-            if (VfxField?.GetValue(__result) is VFXAttributes attributes && !attributes.enabled)
+            RestoreLifetime(helper);
+            if (VfxField?.GetValue(helper) is VFXAttributes attributes && !attributes.enabled)
             {
                 attributes.enabled = true;
             }
@@ -881,32 +1070,76 @@ namespace ROR_O
             }
         }
 
-        // A parked active copy keeps its FixedUpdate, so DestroyOnTimer ages out and then
-        // calls ReturnObject every fixed frame, refiring the return path forever. Parking
-        // disables it (its OnDisable also zeroes the age); waking re-enables it so the
-        // lifetime counts from the spawn, as it does after an activation.
-        private static void ParkDestroyTimer(EffectManagerHelper helper)
+        // EffectManagerHelper._destroyOnTimer is never assigned, so the field cannot find the
+        // timer. DestroyOnParticleEnd stays enabled and, once particles are cleared, calls
+        // ReturnObject every frame. Both are switched off for the park and put back on wake.
+        // Flags are captured once: a second return must not record the disabled state as original.
+        private static void SilenceLifetime(EffectManagerHelper helper)
         {
-            if (!(DestroyTimerField?.GetValue(helper) is DestroyOnTimer timer) || !timer)
+            ParkedCopy parked = ParkedFor(helper);
+            if (!parked.LifetimeCached)
             {
-                return;
+                parked.Timers = helper.GetComponentsInChildren<DestroyOnTimer>(true);
+                parked.TimerWasEnabled = new bool[parked.Timers.Length];
+                for (int i = 0; i < parked.Timers.Length; i++)
+                {
+                    DestroyOnTimer timer = parked.Timers[i];
+                    parked.TimerWasEnabled[i] = timer && timer.enabled;
+                }
+
+                parked.ParticleEnds = helper.GetComponentsInChildren<DestroyOnParticleEnd>(true);
+                parked.ParticleEndWasEnabled = new bool[parked.ParticleEnds.Length];
+                for (int i = 0; i < parked.ParticleEnds.Length; i++)
+                {
+                    DestroyOnParticleEnd end = parked.ParticleEnds[i];
+                    parked.ParticleEndWasEnabled[i] = end && end.enabled;
+                }
+
+                parked.LifetimeCached = true;
             }
 
-            ParkedCopy parked = ParkedFor(helper);
-            parked.TimerWasEnabled = timer.enabled;
-            timer.enabled = false;
+            for (int i = 0; i < parked.Timers.Length; i++)
+            {
+                DestroyOnTimer timer = parked.Timers[i];
+                if (timer)
+                {
+                    timer.enabled = false;
+                }
+            }
+
+            for (int i = 0; i < parked.ParticleEnds.Length; i++)
+            {
+                DestroyOnParticleEnd end = parked.ParticleEnds[i];
+                if (end)
+                {
+                    end.enabled = false;
+                }
+            }
         }
 
-        private static void RestoreDestroyTimer(EffectManagerHelper helper)
+        private static void RestoreLifetime(EffectManagerHelper helper)
         {
-            if (!(DestroyTimerField?.GetValue(helper) is DestroyOnTimer timer) || !timer)
+            if (!Parked.TryGetValue(helper, out ParkedCopy? parked) || parked == null || !parked.LifetimeCached)
             {
                 return;
             }
 
-            if (Parked.TryGetValue(helper, out ParkedCopy? parked) && parked != null)
+            for (int i = 0; i < parked.Timers.Length; i++)
             {
-                timer.enabled = parked.TimerWasEnabled;
+                DestroyOnTimer timer = parked.Timers[i];
+                if (timer)
+                {
+                    timer.enabled = parked.TimerWasEnabled[i];
+                }
+            }
+
+            for (int i = 0; i < parked.ParticleEnds.Length; i++)
+            {
+                DestroyOnParticleEnd end = parked.ParticleEnds[i];
+                if (end)
+                {
+                    end.enabled = parked.ParticleEndWasEnabled[i];
+                }
             }
         }
 
@@ -935,8 +1168,13 @@ namespace ROR_O
             internal readonly bool[] LightWasEnabled;
             internal bool Hidden;
             internal bool Counted;
-            internal bool TimerWasEnabled;
             internal bool NeedsOmniPlay;
+            internal int HotSpawns;
+            internal bool LifetimeCached;
+            internal DestroyOnTimer[] Timers = System.Array.Empty<DestroyOnTimer>();
+            internal bool[] TimerWasEnabled = System.Array.Empty<bool>();
+            internal DestroyOnParticleEnd[] ParticleEnds = System.Array.Empty<DestroyOnParticleEnd>();
+            internal bool[] ParticleEndWasEnabled = System.Array.Empty<bool>();
 
             internal ParkedCopy(Renderer[] renderers, Light[] lights)
             {

@@ -144,7 +144,7 @@ namespace ROR_O
 
         internal static bool KeepPools => keepPools?.Value ?? true;
         internal static bool KeepCopiesActive => keepCopiesActive?.Value == true;
-        internal static int ActiveParkLimit => activeParkLimit != null ? Clamp(activeParkLimit.Value, 0, 512) : 96;
+        internal static int ActiveParkLimit => activeParkLimit != null ? Clamp(activeParkLimit.Value, 0, 192) : 96;
 
         internal static void Bind(ConfigFile config)
         {
@@ -172,7 +172,7 @@ namespace ROR_O
                 section,
                 "Active Parked Copies",
                 96,
-                "<color=#FFDD44>[Experimental]</color> Most pool copies that may stay active while parked at once. Every active parked copy still ticks its scripts, so this cap is what keeps the saving on hot effects from taxing every frame.");
+                "<color=#FFDD44>[Experimental]</color> Most pool copies that may stay active while parked at once. The cap stays under 200: a parked copy is still an active object, and raising this into the hundreds adds a script tick per copy every frame.");
 
             warmFullPeak = config.Bind(
                 section,
@@ -356,8 +356,17 @@ namespace ROR_O
                 prefabs[index] = prefab;
             }
 
-            EffectPools.NotePrefabSpawn(prefab);
-            int inUse = EffectPools.CheckoutCount(prefab);
+            // The pool was created with EffectDef.prefab. The pin can be a second load of the
+            // same address, and the hot-spawn count is a dictionary on the object reference.
+            GameObject? counted = prefab;
+            EffectDef? spawned = EffectCatalog.GetEffectDef((EffectIndex)index);
+            if (spawned != null && spawned.prefab)
+            {
+                counted = spawned.prefab;
+            }
+
+            EffectPools.NotePrefabSpawn(counted);
+            int inUse = EffectPools.CheckoutCount(counted);
             if (inUse <= peakInUse[index])
             {
                 return;
@@ -2194,6 +2203,7 @@ namespace ROR_O
             statusBuilder.Append("\nWarmed prefabs ").Append(warmedPrefabs).Append("  copies built ").Append(instancesBuilt).Append("  peak cap ").Append(cap).Append("  queued ").Append(warmQueue.Count);
             statusBuilder.Append("\nPools ").Append(pools).Append("  idle ").Append(idle).Append("  in use ").Append(inUse);
             statusBuilder.Append("\nLive ").Append(VFXAttributes.readonlyVFXList.Count).Append("  secondary culled ").Append(culledEffects);
+            EffectPools.AppendParkReport(statusBuilder);
             statusText = statusBuilder.ToString();
         }
 
@@ -2235,6 +2245,7 @@ namespace ROR_O
             statusBuilder.Append("  не из пула ").Append(traceNotPooled);
             statusBuilder.Append("\nПопадание — вариант текущего тумана, мягких частиц и инстансинга есть в коллекции после WarmUp.");
             statusBuilder.Append("\nРелизный DX11 не пишет Shader.CreateGPUProgram. Короткий WarmUp — не сборка драйвера.");
+            EffectPools.AppendParkReport(statusBuilder);
             for (int i = 0; i < shaderTraceLines.Count; i++)
             {
                 statusBuilder.Append('\n').Append(shaderTraceLines[i]);
