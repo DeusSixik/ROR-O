@@ -677,12 +677,12 @@ namespace ROR_O.patches
                 "Network",
                 "Threaded Steam P2P",
                 true,
-                "Moves Steam P2P packet sends and reads off the main thread to a background thread. The packet format does not change, so it works with players who do not have ROR-O. Takes effect immediately.");
+                OptionCopy.SteamThreaded);
             debugOverlay = config.Bind(
                 "Network",
                 "Debug Overlay",
                 false,
-                "Shows each player's Steam connection on the line under their version in the lobby and on that player's ally card. The host measures every link. A client measures its own link to the host, and sees other players' links to the host only when the host also has ROR-O. A server without ROR-O is left unchanged. Game version stays beside each player name in the lobby and in a run, in red when it is not yours. Drones and other allies are left unlabeled.");
+                OptionCopy.NetworkDebug);
         }
     }
 }

@@ -40,8 +40,6 @@ namespace ROR_O
         private static ConfigEntry<bool>? warmFullPeak;
         private static ConfigEntry<bool>? warmShaders;
         private static ConfigEntry<int>? warmPeakCopies;
-        private static ConfigEntry<int>? loadsPerFrame;
-        private static ConfigEntry<int>? warmsPerFrame;
         private static ConfigEntry<bool>? cullSecondary;
         private static ConfigEntry<float>? cullDistance;
         private static ConfigEntry<bool>? cullOffScreen;
@@ -130,8 +128,6 @@ namespace ROR_O
         internal static ConfigEntry<bool>? WarmFullPeakEntry => warmFullPeak;
         internal static ConfigEntry<bool>? WarmShadersEntry => warmShaders;
         internal static ConfigEntry<int>? WarmPeakCopiesEntry => warmPeakCopies;
-        internal static ConfigEntry<int>? LoadsPerFrameEntry => loadsPerFrame;
-        internal static ConfigEntry<int>? WarmsPerFrameEntry => warmsPerFrame;
         internal static ConfigEntry<bool>? CullSecondary => cullSecondary;
         internal static ConfigEntry<float>? CullDistanceEntry => cullDistance;
         internal static ConfigEntry<bool>? CullOffScreenEntry => cullOffScreen;
@@ -154,43 +150,43 @@ namespace ROR_O
                 section,
                 "Warm Effect Prefabs",
                 true,
-                "Pins effect prefabs for the run and, while frames are short, builds pool copies up to the largest number of copies of that effect this run has had in use at once. Effects the run never spawns are only pinned, never instantiated.");
+                OptionCopy.EffectWarm);
 
             keepPools = config.Bind(
                 section,
                 "Keep Effect Pools",
                 true,
-                "Keeps idle effect copies until the stage unloads. The game otherwise destroys a pool 45 seconds after its last use, and the next spawn instantiates a new copy.");
+                OptionCopy.KeepPools);
 
             keepCopiesActive = config.Bind(
                 section,
                 "Keep Effect Copies Active",
-                false,
-                "<color=#FFDD44>[Experimental]</color> Copies of frequently spawned effects stay active while parked instead of being deactivated, up to the Active Parked Copies cap. The next spawn skips SetActive. Particles are stopped, renderers and lights are hidden, and the copy leaves the live effect list the same way a deactivate would. A script on the prefab that keeps ticking while it is parked still runs, which is why only hot effects under the cap stay active.");
+                true,
+                OptionCopy.KeepCopiesActive);
 
             activeParkLimit = config.Bind(
                 section,
                 "Active Parked Copies",
                 96,
-                "<color=#FFDD44>[Experimental]</color> Most pool copies that may stay active while parked at once. The cap stays under 200: a parked copy is still an active object, and raising this into the hundreds adds a script tick per copy every frame.");
+                OptionCopy.ParkLimit);
 
             warmFullPeak = config.Bind(
                 section,
                 "Warm Full Observed Peak",
                 false,
-                "<color=#FFDD44>[Experimental]</color> Builds pool copies up to the largest concurrency an effect actually reached this run (at most the game's pool capacity of 20), ignoring Warm Peak Copies. More copies held ready means more memory and more inactive objects per stage.");
+                OptionCopy.WarmFullPeak);
 
             warmShaders = config.Bind(
                 section,
                 "Warm Effect Shaders",
                 false,
-                "<color=#FFDD44>[Experimental]</color> Compiles the shader variants pooled effects draw: the material's own keywords, soft particles and GPU instancing when those are on, and each fog mode the shader declares, on the passes those materials use. Effects marked do-not-pool are skipped. A prefab is held for the session per shader so the run-end release does not drop the compiled programs; if a held shader is gone anyway, the pass starts over. This waits until the lobby. The black screen between stages does as many as a frame can take, and whatever is left continues during play, one prefab on a short frame. The boot splash, the intro cutscene, and the title menu are left alone.");
+                OptionCopy.WarmShaders);
 
             warmPeakCopies = config.Bind(
                 section,
                 "Warm Peak Copies",
                 4,
-                "Most inactive copies to build ahead of time for an effect this run actually uses, based on how many copies it has had in use at once. Zero only pins the prefabs.");
+                OptionCopy.WarmPeakCopies);
 
             // Warm All Effect Copies instantiated every poolable effect at stage start, up to
             // Warm Peak Copies each. That pass stalled the opening, so it is not bound.
@@ -200,78 +196,61 @@ namespace ROR_O
             //     false,
             //     "At the start of a stage, instantiates inactive copies of every poolable effect, up to Warm Peak Copies each, instead of only the effects this run has already used. Copies are scene objects, so this runs after the loading screen, and it can stall the opening of a stage.");
 
-            loadsPerFrame = config.Bind(
-                section,
-                "Asset Loads Per Frame",
-                4,
-                "How many effect prefab loads to start on one frame. The load itself stays in the background.");
-
-            warmsPerFrame = config.Bind(
-                section,
-                "Instance Warms Per Frame",
-                1,
-                "How many inactive effect copies to instantiate on one calm frame.");
-
             cullSecondary = config.Bind(
                 section,
                 "Cull Secondary Effects",
                 true,
-                "Stops secondary particle systems and optional lights past the cull distance. The game marks those as safe to turn off. Main particles and projectile hits keep running.");
+                OptionCopy.CullSecondary);
 
             cullDistance = config.Bind(
                 section,
                 "Cull Distance",
                 55f,
-                "Distance in meters at which secondary particles and optional lights stop. They resume closer than about three quarters of this.");
+                OptionCopy.CullDistance);
 
             cullOffScreen = config.Bind(
                 section,
                 "Cull Off Screen",
                 true,
-                "Also stops secondary particles and optional lights when the effect is outside the camera. They resume once it is visible again.");
+                OptionCopy.CullOffScreen);
 
             cullInterval = config.Bind(
                 section,
                 "Cull Interval",
                 4,
-                "How many frames pass between secondary-effect distance checks.");
+                OptionCopy.CullInterval);
 
             showStatus = config.Bind(
                 section,
                 "Show Effect Status",
                 false,
-                "Draws the live effect-pool counts on screen.");
+                OptionCopy.EffectStatus);
 
             showShaderStatus = config.Bind(
                 section,
                 "Show Shader Compile",
                 false,
-                "Draws effect-shader warmup progress and, on the first spawn of each pooled effect, checks the variant that spawn will draw. A hit means that variant is in a collection whose WarmUp already returned. This release player does not report Shader.CreateGPUProgram, so a hit is not proof the driver built a GPU program. The panel shows how long that WarmUp batch took.");
+                OptionCopy.ShaderStatus);
 
             logStatus = config.Bind(
                 section,
                 "Log Effect Status",
                 false,
-                "Writes the effect-pool counts to the BepInEx log once a second while this is on.");
+                OptionCopy.EffectLog);
 
-            Profile = SettingsProfiles.Begin(config, section);
+            Profile = SettingsProfiles.Begin(config, section, OptionCopy.EffectProfile);
             SettingsProfiles.Add(warmEffects, true, true, true);
             SettingsProfiles.Add(keepPools, true, true, true);
-            SettingsProfiles.Add(keepCopiesActive, false, false, false);
+            SettingsProfiles.Add(keepCopiesActive, true, true, true);
             SettingsProfiles.Add(activeParkLimit, 96, 96, 96);
             SettingsProfiles.Add(warmFullPeak, false, false, false);
             SettingsProfiles.Add(warmShaders, false, false, false);
             SettingsProfiles.Add(warmPeakCopies, 2, 4, 6);
             // SettingsProfiles.Add(warmAllCopies, false, false, false);
-            SettingsProfiles.Add(loadsPerFrame, 2, 4, 4);
-            SettingsProfiles.Add(warmsPerFrame, 1, 1, 1);
             SettingsProfiles.Add(cullSecondary, false, true, true);
             SettingsProfiles.Add(cullDistance, 80f, 55f, 28f);
             SettingsProfiles.Add(cullOffScreen, false, true, true);
             SettingsProfiles.Add(cullInterval, 8, 4, 2);
-            SettingsProfiles.Add(showStatus, false, false, false);
-            SettingsProfiles.Add(showShaderStatus, false, false, false);
-            SettingsProfiles.Add(logStatus, false, false, false);
             SettingsProfiles.End();
         }
 
@@ -466,23 +445,40 @@ namespace ROR_O
                 return;
             }
 
-            // One prefab per frame, including the character select. The ring is the progress of
-            // that lazy pass. A single pin used to scan every assembly and freeze the frame;
-            // the loader is resolved at plugin load, so a pin here is only the asset start.
+            // Warmup Pace decides how many prefabs to start, including on the character select.
+            // A single pin used to scan every assembly and freeze the frame; the loader is
+            // resolved at plugin load, so a pin here is only the asset start. Several cheap
+            // starts fit on one frame. One start that already ran long ends the burst.
             bool loading = LoadingPhase.IsLoading;
             float frameSeconds = Time.unscaledDeltaTime;
             bool frameBlocked = !loading && (frameSeconds > HitchFrameSeconds || Time.unscaledTime < warmNotBefore);
             if (!frameBlocked && pinCursor < count)
             {
+                int loadBudget = WarmPaceSettings.EffectLoadsPerFrame;
+                int startedLoads = 0;
                 long pinStart = Stopwatch.GetTimestamp();
-                if (Pin(pinCursor))
+                while (startedLoads < loadBudget && pinCursor < count)
                 {
-                    pinCursor++;
-                    float pinMs = (float)((Stopwatch.GetTimestamp() - pinStart) * 1000d / Stopwatch.Frequency);
-                    if (!loading && pinMs > ExpensiveWarmMs)
+                    if (!Pin(pinCursor))
                     {
-                        float cooldown = pinMs * 0.008f;
-                        warmNotBefore = Time.unscaledTime + (cooldown > 1f ? 1f : cooldown);
+                        break;
+                    }
+
+                    pinCursor++;
+                    startedLoads++;
+                    if (!loading)
+                    {
+                        float burstMs = (float)((Stopwatch.GetTimestamp() - pinStart) * 1000d / Stopwatch.Frequency);
+                        if (burstMs > ExpensiveWarmMs)
+                        {
+                            float cooldown = burstMs * 0.008f;
+                            warmNotBefore = Time.unscaledTime + (cooldown > 1f ? 1f : cooldown);
+                            break;
+                        }
+                    }
+                    else if (LoadingPhase.BudgetExpired(pinStart, startedLoads))
+                    {
+                        break;
                     }
                 }
 
@@ -491,7 +487,8 @@ namespace ROR_O
 
             LoadingProgress.Set("Effect prefabs", pinCursor, count, pinCursor < count);
             // Shader variants are global, so a compile started in the character select is not thrown
-            // away when the stage activates. Outside the fade, one prefab on a short frame.
+            // away when the stage activates. Outside the fade, Warmup Pace caps how many prefabs
+            // are compiled on a short frame.
             if (warmShaders?.Value == true && shaderCursor < count && (loading || !frameBlocked))
             {
                 WarmShaderStep(count, loading);
@@ -547,7 +544,7 @@ namespace ROR_O
                 return;
             }
 
-            int budget = Clamp(warmsPerFrame?.Value ?? 1, 1, 2);
+            int budget = WarmPaceSettings.EffectWarmsPerFrame;
             int built = 0;
             int checks = waiting;
             long frameStart = Stopwatch.GetTimestamp();
@@ -928,16 +925,28 @@ namespace ROR_O
                     CollectShaderVariants(prefab!, index);
                 }
 
-                // In play, compile this prefab now. Saving variants up for a batch of 24
-                // would land that whole compile on one later frame.
+                // In play, compile this prefab before taking the next one. Saving variants up
+                // for a batch of 24 would land that whole compile on one later frame.
+                // Warmup Pace decides how many of those single compiles fit on the frame.
                 if (!rush || shaderBatchCount >= 24)
                 {
                     FlushShaderBatch();
                 }
 
-                if (!rush || LoadingPhase.BudgetExpired(started, processed))
+                if (rush)
                 {
-                    break;
+                    if (LoadingPhase.BudgetExpired(started, processed))
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    float stepMs = (float)((Stopwatch.GetTimestamp() - started) * 1000d / Stopwatch.Frequency);
+                    if (processed >= WarmPaceSettings.ShaderPrefabsPerFrame || stepMs > ExpensiveWarmMs)
+                    {
+                        break;
+                    }
                 }
             }
 

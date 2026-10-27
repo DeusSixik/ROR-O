@@ -1653,7 +1653,7 @@ namespace ROR_O.patches
                 "Dynamic Bones",
                 "Multithreaded Simulation",
                 true,
-                "Simulates all DynamicBones that update in a frame together on Unity worker threads after LateUpdate, leaving only the final transform writes on the main thread. Takes effect immediately.");
+                OptionCopy.BoneJobs);
             DynamicBoneJobs.Bind(entry);
             SettingsProfiles.AddLate("Dynamic Bones", entry, true, true, true);
             RiskOfOptionsIntegration.Hold(new RiskOfOptionsCatalog { EnableDynamicBoneJobs = entry });

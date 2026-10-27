@@ -38,7 +38,6 @@ namespace ROR_O
         private static readonly StringBuilder statusBuilder = new StringBuilder(256);
 
         private static ConfigEntry<bool>? enable;
-        private static ConfigEntry<int>? mastersPerFrame;
         private static ConfigEntry<bool>? warmBosses;
         private static ConfigEntry<bool>? skipLongFrames;
         private static ConfigEntry<bool>? showStatus;
@@ -72,7 +71,6 @@ namespace ROR_O
 
         internal static ConfigEntry<SettingsProfiles.Profile>? Profile { get; private set; }
         internal static ConfigEntry<bool>? EnableEntry => enable;
-        internal static ConfigEntry<int>? MastersPerFrameEntry => mastersPerFrame;
         internal static ConfigEntry<bool>? WarmBossesEntry => warmBosses;
         internal static ConfigEntry<bool>? SkipLongFramesEntry => skipLongFrames;
         internal static ConfigEntry<bool>? ShowStatusEntry => showStatus;
@@ -89,52 +87,42 @@ namespace ROR_O
                 section,
                 "Prewarm Stage Spawns",
                 true,
-                "Preloads the animator, avatar, and skins of monsters this stage can spawn. While the stage is loading, those loads start in the background and this does not wait for them. After the stage is in, the game is told about them a few masters at a time. Can include bosses from the stage list. Takes effect on the next stage.");
-
-            mastersPerFrame = config.Bind(
-                section,
-                "Masters Per Frame",
-                1,
-                "How many monster masters to preload on one frame. Higher finishes the queue sooner and can hitch harder on that frame.");
+                OptionCopy.SpawnPrewarm);
 
             warmBosses = config.Bind(
                 section,
                 "Warm Stage Bosses",
                 true,
-                "Also preloads champion monsters from this stage's list. The game's own preload skips them. Takes effect on the next stage.");
+                OptionCopy.WarmBosses);
 
             skipLongFrames = config.Bind(
                 section,
                 "Skip Long Frames",
                 false,
-                "Waits for another frame when the last one already took longer than 33 ms, so a preload is not stacked onto a hitch.");
+                OptionCopy.SkipLongFrames);
 
             showStatus = config.Bind(
                 section,
                 "Show Mob Status",
                 false,
-                "Draws the live spawn-prewarm counts on screen.");
+                OptionCopy.MobStatus);
 
             logStatus = config.Bind(
                 section,
                 "Log Mob Status",
                 false,
-                "Writes the spawn-prewarm counts to the BepInEx log once a second while this is on.");
+                OptionCopy.MobLog);
 
             lateSpawnImmunity = config.Bind(
                 section,
                 "Late Spawn Immunity",
                 false,
-                "<color=#FFDD44>[Gameplay tweak]</color> When a player other than the host spawns on a stage, the host grants them the Immune buff for 5 seconds. A stage entry otherwise has no spawn protection. Revives already get 3 seconds from the game, and this does not replace that. The joining client cannot apply it to itself.");
+                OptionCopy.LateImmunity);
 
-            Profile = SettingsProfiles.Begin(config, section);
+            Profile = SettingsProfiles.Begin(config, section, OptionCopy.SpawnProfile);
             SettingsProfiles.Add(enable, true, true, true);
-            SettingsProfiles.Add(mastersPerFrame, 1, 1, 2);
             SettingsProfiles.Add(warmBosses, true, true, true);
             SettingsProfiles.Add(skipLongFrames, true, false, false);
-            SettingsProfiles.Add(showStatus, false, false, false);
-            SettingsProfiles.Add(logStatus, false, false, false);
-            SettingsProfiles.Add(lateSpawnImmunity, false, false, false);
             SettingsProfiles.End();
         }
 
@@ -268,7 +256,7 @@ namespace ROR_O
                 return;
             }
 
-            int budget = Clamp(mastersPerFrame?.Value ?? 1, 1, 4);
+            int budget = WarmPaceSettings.MastersPerFrame;
             long frameStart = Stopwatch.GetTimestamp();
             int processed = 0;
             if (!loading)
@@ -766,7 +754,8 @@ namespace ROR_O
             statusBuilder.Append("  bosses ").Append(bossesListed).Append(" added ").Append(bossesQueued);
             statusBuilder.Append("  elite displays pinned ").Append(eliteDisplays);
             statusBuilder.Append("  network list ").Append(networkListed).Append(" added ").Append(networkQueued);
-            statusBuilder.Append("\nPer frame ").Append(Clamp(mastersPerFrame?.Value ?? 1, 1, 4));
+            statusBuilder.Append("\nPace ").Append(WarmPaceSettings.Current);
+            statusBuilder.Append("  per frame ").Append(WarmPaceSettings.MastersPerFrame);
             statusBuilder.Append("  skip long ").Append(skipLongFrames?.Value == true ? "on" : "off");
             statusBuilder.Append("  long skips ").Append(longSkips);
             if (sceneHold)
@@ -801,16 +790,6 @@ namespace ROR_O
             builder.Append(tenths / 10);
             builder.Append('.');
             builder.Append(tenths % 10);
-        }
-
-        private static int Clamp(int value, int min, int max)
-        {
-            if (value < min)
-            {
-                return min;
-            }
-
-            return value > max ? max : value;
         }
 
         [HarmonyPatch(typeof(NetworkPreloadManager), "PreloadRequestedMastersCache")]

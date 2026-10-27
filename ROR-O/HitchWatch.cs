@@ -1556,8 +1556,7 @@ namespace ROR_O
 
     internal static class HitchWatchSettings
     {
-        private const string MonoProfilerDescription =
-            "On the next launch, load the separately installed BepInEx.Debug Mono Profiler. ROR-O runs normally when this is off or when the profiler is not installed. The switch does not take effect until the game is restarted. (The profiler is only built in Dev builds)";
+        private static string MonoProfilerDescription => OptionCopy.MonoProfiler;
 
         private static ConfigEntry<bool>? enabled;
         private static ConfigEntry<int>? targetFps;
@@ -1612,13 +1611,13 @@ namespace ROR_O
                 "Profiler",
                 "Hitch Watch",
                 false,
-                "Records frame time without the Mono profiler. Reads Unity's own counters every frame and writes the slow tail (1% and 0.1% of CPU and render time) plus any 10 second stretch under the recent median or the target FPS. Applies immediately.");
+                OptionCopy.HitchWatch);
 
             targetFps = config.Bind(
                 "Profiler",
                 "Hitch Watch Target FPS",
                 60,
-                "Playable frame rate. Hitch Watch marks a stretch when its average FPS stays under this, or under the recent median. 60 is a frame every 16.7 ms.");
+                OptionCopy.HitchFps);
         }
     }
 

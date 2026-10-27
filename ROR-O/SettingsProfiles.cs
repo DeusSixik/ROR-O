@@ -53,7 +53,7 @@ namespace ROR_O
             }
         }
 
-        public static ConfigEntry<Profile> Begin(ConfigFile config, string section)
+        public static ConfigEntry<Profile> Begin(ConfigFile config, string section, string? description = null)
         {
             if (current != null)
             {
@@ -69,7 +69,7 @@ namespace ROR_O
                     section,
                     "Profile",
                     Profile.Custom,
-                    "Preset for this category. Lossless is a gain that should not be visible, Performance spends a little image quality for a larger gain, and Potato pushes the visible settings without getting in the way of playing. Changing any setting yourself selects Custom.")
+                    description ?? OptionCopy.Profile)
             };
             return current.ProfileEntry;
         }
