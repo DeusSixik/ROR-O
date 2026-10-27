@@ -267,10 +267,10 @@ namespace ROR_O
         internal static string WarmShaders => OptionText.Build(
             OptionText.Badge("Experimental", OptionText.Experimental),
             OptionText.Channels(
-                OptionText.Cost("CPU", "Low", "tens of microseconds a call, about 10 ms for the catalog."),
-                OptionText.Save("GPU", "TBD", "not shown to remove the first-draw hitch. 1% N/D.")),
-            "This player does not report whether the driver built a GPU program.",
-            "Compiles variants of pooled effects. Waits until the lobby. The black screen uses the frame budget, then Warmup Pace. Splash, intro, and title are left alone.");
+                OptionText.Cost("CPU", "Medium", "one hidden Camera.Render per pooled prefab while the cursor runs, then nothing each frame. One run: 0.47 ms a call, 766 ms for 1638 calls. 1% of those calls N/D."),
+                OptionText.Save("GPU", "TBD", "a later draw of the same variant. That run did not show a one-time compile. 1% N/D.")),
+            "Needs Warm Effect Prefabs. Splash, intro, and title are left alone. A call over 1 ms there was a heavier draw, not a separate driver compile.",
+            "Draws each pooled effect once into a 4x4 target, then holds one prefab per shader. The camera stays disabled after the cursor finishes.");
 
         internal static string WarmPeakCopies => OptionText.Build(null, OptionText.Channels(OptionText.Cost("CPU", "Low", "about 0.2-0.3 ms per new copy, not every frame. Over 1 ms is TBC."), OptionText.Save("CPU", "TBC")), "Zero only pins. Ignored while Warm Full Observed Peak is on.", "Most inactive copies to build ahead for an effect this run uses.");
         internal static string CullSecondary => OptionText.Build(
@@ -289,7 +289,7 @@ namespace ROR_O
         internal static string MobStatus => Readout("Draws the spawn-prewarm counts. The text rebuilds twice a second.");
         internal static string MobLog => OptionText.Build(OptionText.Badge("Readout", OptionText.Readout), ReadoutLoad, "The log grows while this stays on.", "Writes the spawn-prewarm counts once a second.");
         internal static string EffectStatus => Readout("Draws the effect-pool counts. The text rebuilds twice a second.");
-        internal static string ShaderStatus => OptionText.Build(OptionText.Badge("Readout", OptionText.Readout), ReadoutLoad, "A hit is not proof the driver built a GPU program.", "Draws shader-warmup progress and checks the variant on the first spawn of each pooled effect.");
+        internal static string ShaderStatus => OptionText.Build(OptionText.Badge("Readout", OptionText.Readout), ReadoutLoad, "The lines are the last calls at or over 1 ms, not the slowest of the run. This player does not log Shader.CreateGPUProgram.", "Draws the hidden-render cursor, the Camera.Render count and sum, and the last calls that took at least 1 ms.");
         internal static string EffectLog => OptionText.Build(OptionText.Badge("Readout", OptionText.Readout), ReadoutLoad, "The log grows while this stays on.", "Writes the effect-pool counts once a second.");
         internal static string LateImmunity => OptionText.Build(OptionText.Badge("Gameplay", OptionText.Gameplay), null, "The host applies it. A joining client cannot. Revives already get 3 seconds, and this does not replace that.", "When a player other than the host spawns on a stage, the host grants them Immune for 5 seconds.");
         internal static string NetworkDebug => OptionText.Build(OptionText.Badge("Readout", OptionText.Readout), ReadoutLoad, "A client sees other players' links only when the host also has ROR-O.", "Shows each player's Steam connection in the lobby and on the ally card. Version is red when it is not yours.");
