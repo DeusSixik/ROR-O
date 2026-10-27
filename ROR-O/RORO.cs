@@ -342,6 +342,7 @@ namespace ROR_O
 
     [BepInPlugin(Modguid, ModName, ModVersion)]
     [BepInDependency("com.rune580.riskofoptions", BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency("droppod.lookingglass", BepInDependency.DependencyFlags.SoftDependency)]
     public sealed class RORO : BaseUnityPlugin
     {
         public static ManualLogSource? GlobalLogger { get; private set; }
@@ -358,6 +359,7 @@ namespace ROR_O
 
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
+            patches.mods.OptimizeLookingGlassPatch.Register(harmony);
             patches.OptimizeSphereSearch.Install(harmony);
             EffectPools.Install(harmony);
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
