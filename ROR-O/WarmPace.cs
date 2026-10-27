@@ -54,12 +54,12 @@ namespace ROR_O
                 OptionText.Build(
                     null,
                     OptionText.Channels(
-                        OptionText.Cost("CPU", "Medium", "hitch. Faster does more of the same work on one frame."),
-                        OptionText.Save("CPU", "N/A", "average. It finishes sooner, it does not remove the work. 1% can get worse. TBC.")),
+                        OptionText.Cost("CPU", "Medium", "Faster does more of the same work on one frame, which can stutter."),
+                        OptionText.Save("CPU", "N/A", "It finishes sooner. It does not remove the work. The slowest frames can get worse. Not checked twice.")),
                     "A frame that already ran long still waits.",
-                    "Lazy does one master registration, one effect-prefab start, one effect copy, and one shader prefab on a frame. Faster does "
+                    "Lazy prepares one character, starts one effect prefab, builds one effect copy, and draws one effect shader on a frame. Faster does "
                         + FasterMasters + ", " + FasterLoads + ", " + FasterWarms + ", and " + FasterShaders
-                        + ". On the loading screen, shader compiles still run until the 10 ms budget either way. Takes effect immediately."));
+                        + ". On the loading screen, effect shader draws still run until about 10 ms either way. Takes effect immediately."));
         }
 
         // Bind keeps Warmup Pace once it is in the file, so this default matters only on the

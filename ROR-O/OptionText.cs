@@ -237,7 +237,7 @@ namespace ROR_O
                 OptionText.Cost("CPU", "Medium", "hitch. A new copy averages about 0.2-0.3 ms, and a warm that already cost over 0.5 ms sat near 1.6 ms on hitch frames, up to about 30. 1% of every frame N/D."),
                 OptionText.Save("CPU", "TBC", "a later spawn skips that Instantiate. Whether the 1% moves is N/D.")),
             "The build is moved off the spawn onto another frame. Several on one frame add, and one cold call has been most of a hitch frame.",
-            "Pins prefabs for the run and builds copies up to the observed peak while frames are short. A pooled spawn still restarts particles and walks the hierarchy. Unused effects are only pinned.");
+            "Pins prefabs until the playthrough ends and builds copies up to the observed peak while frames are short. A pooled spawn still restarts particles and walks the hierarchy. Unused effects are only pinned.");
 
         internal static string KeepPools => OptionText.Build(
             null,
@@ -250,29 +250,29 @@ namespace ROR_O
             null,
             OptionText.Channels(
                 OptionText.Cost("CPU", "Low", "a few hundredths of a ms/frame at 96 copies. 1% TBC."),
-                OptionText.Cost("GPU", "N/D", "particles and renderers are hidden. One run saw no rise. TBC."),
+                OptionText.Cost("GPU", "N/D", "particles and renderers are hidden. Tests saw no rise. TBC."),
                 OptionText.Save("CPU", "Low", "the next spawn skips SetActive. ms N/D.")),
             "Past the cap, further copies are deactivated.",
             "Frequent effects stay active while parked. Particles, renderers, and lights are hidden.");
 
-        internal static string ParkLimit => OptionText.Build(null, OptionText.Channels(OptionText.Cost("CPU", "Low", "one script tick per active parked copy, every frame."), OptionText.Save("CPU", "N/A")), "Toward 192 that tick is paid for more copies.", "How many parked copies may stay active at once. 96 is what those runs were measured at.");
+        internal static string ParkLimit => OptionText.Build(null, OptionText.Channels(OptionText.Cost("CPU", "Low", "one script tick per active parked copy, every frame."), OptionText.Save("CPU", "N/A")), "Toward 192 that tick is paid for more copies.", "How many parked copies may stay active at once. Tests used 96.");
         internal static string WarmFullPeak => OptionText.Build(
             OptionText.Badge("Experimental", OptionText.Experimental),
             OptionText.Channels(
                 OptionText.Cost("CPU", "Medium", "hitch. Each extra copy is an Instantiate, about 0.2-0.3 ms on average. They add on one frame. Over 1 ms each is TBC."),
-                OptionText.Save("CPU", "TBC", "1% of a later burst. Average across a run stays low. 1% N/D.")),
+                OptionText.Save("CPU", "TBC", "1% of a later burst. The stage average stays low. 1% N/D.")),
             "A combat frame has reached several ms. More copies mean more memory.",
-            "Builds copies up to the largest concurrency this run reached, at most 20, ignoring Warm Peak Copies.");
+            "Builds copies up to the most that have been out at once for that effect, at most 20, ignoring Warm Peak Copies.");
 
         internal static string WarmShaders => OptionText.Build(
             OptionText.Badge("Experimental", OptionText.Experimental),
             OptionText.Channels(
-                OptionText.Cost("CPU", "Medium", "one hidden Camera.Render per pooled prefab while the cursor runs, then nothing each frame. One run: 0.47 ms a call, 766 ms for 1638 calls. 1% of those calls N/D."),
-                OptionText.Save("GPU", "TBD", "a later draw of the same variant. That run did not show a one-time compile. 1% N/D.")),
-            "Needs Warm Effect Prefabs. Splash, intro, and title are left alone. A call over 1 ms there was a heavier draw, not a separate driver compile.",
-            "Draws each pooled effect once into a 4x4 target, then holds one prefab per shader. The camera stays disabled after the cursor finishes.");
+                OptionText.Cost("CPU", "Medium", "one hidden Camera.Render per pooled prefab while the list is still being drawn, then nothing each frame. In tests, 0.47 ms a call, 766 ms for 1638 calls. 1% of those calls N/D."),
+                OptionText.Save("GPU", "TBD", "a later draw of the same variant. Tests did not show a one-time compile. 1% N/D.")),
+            "Needs Warm Effect Prefabs. Splash, intro, and title are left alone. In tests a call over 1 ms was a heavier draw, not a driver compile.",
+            "Draws each pooled effect once into a 4x4 target, then holds one prefab per shader. The camera stays disabled once the list is done.");
 
-        internal static string WarmPeakCopies => OptionText.Build(null, OptionText.Channels(OptionText.Cost("CPU", "Low", "about 0.2-0.3 ms per new copy, not every frame. Over 1 ms is TBC."), OptionText.Save("CPU", "TBC")), "Zero only pins. Ignored while Warm Full Observed Peak is on.", "Most inactive copies to build ahead for an effect this run uses.");
+        internal static string WarmPeakCopies => OptionText.Build(null, OptionText.Channels(OptionText.Cost("CPU", "Low", "about 0.2-0.3 ms per new copy, not every frame. Over 1 ms is TBC."), OptionText.Save("CPU", "TBC")), "Zero only pins. Ignored while Warm Full Observed Peak is on.", "Most inactive copies to build ahead for an effect you have already used.");
         internal static string CullSecondary => OptionText.Build(
             null,
             OptionText.Channels(
@@ -289,7 +289,7 @@ namespace ROR_O
         internal static string MobStatus => Readout("Draws the spawn-prewarm counts. The text rebuilds twice a second.");
         internal static string MobLog => OptionText.Build(OptionText.Badge("Readout", OptionText.Readout), ReadoutLoad, "The log grows while this stays on.", "Writes the spawn-prewarm counts once a second.");
         internal static string EffectStatus => Readout("Draws the effect-pool counts. The text rebuilds twice a second.");
-        internal static string ShaderStatus => OptionText.Build(OptionText.Badge("Readout", OptionText.Readout), ReadoutLoad, "The lines are the last calls at or over 1 ms, not the slowest of the run. This player does not log Shader.CreateGPUProgram.", "Draws the hidden-render cursor, the Camera.Render count and sum, and the last calls that took at least 1 ms.");
+        internal static string ShaderStatus => OptionText.Build(OptionText.Badge("Readout", OptionText.Readout), ReadoutLoad, "The lines are the latest calls at or over 1 ms, not the slowest ones. The release build does not log Shader.CreateGPUProgram.", "Draws how far the hidden draws have got, the Camera.Render count and sum, and the latest calls that took at least 1 ms.");
         internal static string EffectLog => OptionText.Build(OptionText.Badge("Readout", OptionText.Readout), ReadoutLoad, "The log grows while this stays on.", "Writes the effect-pool counts once a second.");
         internal static string LateImmunity => OptionText.Build(OptionText.Badge("Gameplay", OptionText.Gameplay), null, "The host applies it. A joining client cannot. Revives already get 3 seconds, and this does not replace that.", "When a player other than the host spawns on a stage, the host grants them Immune for 5 seconds.");
         internal static string NetworkDebug => OptionText.Build(OptionText.Badge("Readout", OptionText.Readout), ReadoutLoad, "A client sees other players' links only when the host also has ROR-O.", "Shows each player's Steam connection in the lobby and on the ally card. Version is red when it is not yours.");
