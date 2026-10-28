@@ -122,38 +122,6 @@ namespace ROR_O.patches
         }
     }
 
-    [HarmonyPatch(typeof(OilController), nameof(OilController.Update))]
-    public static class OptimizeOilControllerPatch
-    {
-        private static readonly MethodInfo GameObjectGetOilGhostControllerMethod = MakeGameObjectGetComponentMethod(typeof(OilGhostController));
-        private static readonly MethodInfo CachedOilGhostControllerMethod = AccessTools.Method(
-            typeof(OptimizedComponentCache),
-            nameof(OptimizedComponentCache.GetOilGhostController));
-
-        [HarmonyTranspiler]
-        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-        {
-            return ReplaceInstructions(instructions, GameObjectGetOilGhostControllerMethod, CachedOilGhostControllerMethod,
-                "OilController.Update");
-        }
-    }
-
-    [HarmonyPatch(typeof(MusicController), nameof(MusicController.LateUpdate))]
-    public static class OptimizeMusicControllerPatch
-    {
-        private static readonly MethodInfo GameObjectGetCharacterBodyMethod = MakeGameObjectGetComponentMethod(typeof(CharacterBody));
-        private static readonly MethodInfo CachedCharacterBodyMethod = AccessTools.Method(
-            typeof(OptimizedComponentCache),
-            nameof(OptimizedComponentCache.GetCharacterBody));
-
-        [HarmonyTranspiler]
-        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-        {
-            return ReplaceInstructions(instructions, GameObjectGetCharacterBodyMethod, CachedCharacterBodyMethod,
-                "MusicController.LateUpdate");
-        }
-    }
-
     [HarmonyPatch(typeof(BazaarController), nameof(BazaarController.Update))]
     public static class OptimizeBazaarControllerPatch
     {

@@ -140,40 +140,6 @@ namespace ROR_O.patches
                 replaceScaleDurationFromComponent: true);
     }
 
-    [HarmonyPatch(typeof(EntityStates.Huntress.BlinkState), nameof(EntityStates.Huntress.BlinkState.FixedUpdate))]
-    public static class OptimizeBlinkStatePatch
-    {
-        [HarmonyTranspiler]
-        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) =>
-            OptimizeStateVfxPatchTools.ReplaceInstructions(
-                instructions,
-                "BlinkState.FixedUpdate",
-                replaceScaleDurationFromGameObject: true,
-                replaceScaleDurationFromComponent: true);
-    }
-
-    [HarmonyPatch(typeof(EntityStates.Drone.DroneWeapon.Flamethrower), nameof(EntityStates.Drone.DroneWeapon.Flamethrower.OnEnter))]
-    public static class OptimizeDroneFlamethrowerPatch
-    {
-        [HarmonyTranspiler]
-        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) =>
-            OptimizeStateVfxPatchTools.ReplaceInstructions(
-                instructions,
-                "DroneFlamethrower.OnEnter",
-                replaceScaleDurationFromComponent: true);
-    }
-
-    [HarmonyPatch(typeof(EntityStates.FalseSon.ClubSwing3), nameof(EntityStates.FalseSon.ClubSwing3.FixedUpdate))]
-    public static class OptimizeClubSwing3Patch
-    {
-        [HarmonyTranspiler]
-        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) =>
-            OptimizeStateVfxPatchTools.ReplaceInstructions(
-                instructions,
-                "ClubSwing3.FixedUpdate",
-                replaceScaleDurationFromComponent: true);
-    }
-
     [HarmonyPatch(typeof(EntityStates.FalseSonBoss.ClubForsakenBoss), nameof(EntityStates.FalseSonBoss.ClubForsakenBoss.FixedUpdate))]
     public static class OptimizeClubForsakenBossPatch
     {
