@@ -81,23 +81,11 @@ namespace ROR_O.patches
         private static readonly FixedConditionalWeakTable<GameObject, CacheBox<FalseSonBossController>> FalseSonBossControllers =
             new FixedConditionalWeakTable<GameObject, CacheBox<FalseSonBossController>>();
 
-        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<OilGhostController>> OilGhostControllers =
-            new FixedConditionalWeakTable<GameObject, CacheBox<OilGhostController>>();
-
         private static readonly FixedConditionalWeakTable<GameObject, CacheBox<PlayerCharacterMasterController>> PlayerCharacterMasterControllers =
             new FixedConditionalWeakTable<GameObject, CacheBox<PlayerCharacterMasterController>>();
 
         private static readonly FixedConditionalWeakTable<GameObject, CacheBox<SkillLocator>> SkillLocators =
             new FixedConditionalWeakTable<GameObject, CacheBox<SkillLocator>>();
-
-        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<TeamFilter>> TeamFilters =
-            new FixedConditionalWeakTable<GameObject, CacheBox<TeamFilter>>();
-
-        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<ProjectileController>> ProjectileControllers =
-            new FixedConditionalWeakTable<GameObject, CacheBox<ProjectileController>>();
-
-        private static readonly FixedConditionalWeakTable<GameObject, CacheBox<ProjectileDamage>> ProjectileDamages =
-            new FixedConditionalWeakTable<GameObject, CacheBox<ProjectileDamage>>();
 
         private static readonly FixedConditionalWeakTable<GameObject, CacheBox<ChildLocator>> ChildLocators =
             new FixedConditionalWeakTable<GameObject, CacheBox<ChildLocator>>();
@@ -216,9 +204,6 @@ namespace ROR_O.patches
         public static FalseSonBossController? GetFalseSonBossControllerFromComponent(Component component) =>
             GetOrAdd(component, FalseSonBossControllers, target => target.GetComponent<FalseSonBossController>());
 
-        public static OilGhostController? GetOilGhostController(GameObject gameObject) =>
-            GetOrAdd(gameObject, OilGhostControllers, target => target.GetComponent<OilGhostController>());
-
         public static PlayerCharacterMasterController? GetPlayerCharacterMasterController(Component component) =>
             GetOrAdd(component, PlayerCharacterMasterControllers, target => target.GetComponent<PlayerCharacterMasterController>());
 
@@ -227,15 +212,6 @@ namespace ROR_O.patches
 
         public static SkillLocator? GetSkillLocatorFromComponent(Component component) =>
             GetOrAdd(component, SkillLocators, target => target.GetComponent<SkillLocator>());
-
-        public static TeamFilter? GetTeamFilter(GameObject gameObject) =>
-            GetOrAdd(gameObject, TeamFilters, target => target.GetComponent<TeamFilter>());
-
-        public static ProjectileController? GetProjectileController(GameObject gameObject) =>
-            GetOrAdd(gameObject, ProjectileControllers, target => target.GetComponent<ProjectileController>());
-
-        public static ProjectileDamage? GetProjectileDamage(GameObject gameObject) =>
-            GetOrAdd(gameObject, ProjectileDamages, target => target.GetComponent<ProjectileDamage>());
 
         public static ChildLocator? GetChildLocatorFromComponent(Component component) =>
             GetOrAdd(component, ChildLocators, target => target.GetComponent<ChildLocator>());
