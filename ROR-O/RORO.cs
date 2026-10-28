@@ -72,9 +72,6 @@ namespace ROR_O
         public static bool EnableGenericIkInvisibleThrottling => enableGenericIkInvisibleThrottling?.Value ?? true;
         public static int GenericIkInvisibleUpdateInterval => genericIkInvisibleUpdateInterval?.Value ?? 4;
         public static int GenericIkRecentlyVisibleGraceFrames => genericIkRecentlyVisibleGraceFrames?.Value ?? 4;
-        public static bool EnableSpawnPrewarm => enableSpawnPrewarm?.Value ?? true;
-
-        private static ConfigEntry<bool>? enableSpawnPrewarm;
 
         private static ConfigEntry<SettingsProfiles.Profile>? damageNumbersProfile;
         private static ConfigEntry<SettingsProfiles.Profile>? dynamicBonesProfile;
@@ -82,105 +79,107 @@ namespace ROR_O
 
         public static void Bind(ConfigFile config)
         {
+            WarmPaceSettings.Bind(config);
+
             const string damageNumbersSection = "Damage Numbers";
 
             enableDamageNumberLoadShedding = config.Bind(
                 damageNumbersSection,
                 "Enable Load Shedding",
                 true,
-                "Reduces the number of spawned damage number particles during heavy combat.");
+                OptionCopy.DamageShedding);
 
             softParticleCap = config.Bind(
                 damageNumbersSection,
                 "Soft Particle Cap",
                 96,
-                "Starts lightly sampling regular damage numbers when active particles reach this amount.");
+                OptionCopy.SoftParticleCap);
 
             hardParticleCap = config.Bind(
                 damageNumbersSection,
                 "Hard Particle Cap",
                 144,
-                "Uses stronger sampling when active particles reach this amount.");
+                OptionCopy.HardParticleCap);
 
             absoluteParticleCap = config.Bind(
                 damageNumbersSection,
                 "Absolute Particle Cap",
                 208,
-                "Uses the strongest sampling when active particles reach this amount.");
+                OptionCopy.AbsoluteParticleCap);
 
             softSpawnsPerFrame = config.Bind(
                 damageNumbersSection,
                 "Soft Spawns Per Frame",
                 18,
-                "Starts lightly sampling regular damage numbers when this many spawns happen in one frame.");
+                OptionCopy.SoftSpawnsPerFrame);
 
             hardSpawnsPerFrame = config.Bind(
                 damageNumbersSection,
                 "Hard Spawns Per Frame",
                 32,
-                "Uses stronger sampling when this many spawns happen in one frame.");
+                OptionCopy.HardSpawnsPerFrame);
 
             absoluteSpawnsPerFrame = config.Bind(
                 damageNumbersSection,
                 "Absolute Spawns Per Frame",
                 44,
-                "Uses the strongest sampling when this many spawns happen in one frame.");
+                OptionCopy.AbsoluteSpawnsPerFrame);
 
             softPeakDamageFraction = config.Bind(
                 damageNumbersSection,
                 "Soft Peak Damage Fraction",
                 0.04f,
-                "During soft load shedding, regular hits at or above this fraction of the recent peak damage are preserved.");
+                OptionCopy.SoftPeakFraction);
 
             hardPeakDamageFraction = config.Bind(
                 damageNumbersSection,
                 "Hard Peak Damage Fraction",
                 0.10f,
-                "During hard load shedding, regular hits at or above this fraction of the recent peak damage are preserved.");
+                OptionCopy.HardPeakFraction);
 
             absolutePeakDamageFraction = config.Bind(
                 damageNumbersSection,
                 "Absolute Peak Damage Fraction",
                 0.20f,
-                "During the strongest load shedding, regular hits at or above this fraction of the recent peak damage are preserved.");
+                OptionCopy.AbsolutePeakFraction);
 
             softMinimumDamage = config.Bind(
                 damageNumbersSection,
                 "Soft Minimum Damage",
                 1f,
-                "During soft load shedding, regular hits at or above this raw damage value are preserved even if recent peak damage is low.");
+                OptionCopy.SoftMinimumDamage);
 
             hardMinimumDamage = config.Bind(
                 damageNumbersSection,
                 "Hard Minimum Damage",
                 2f,
-                "During hard load shedding, regular hits at or above this raw damage value are preserved even if recent peak damage is low.");
+                OptionCopy.HardMinimumDamage);
 
             absoluteMinimumDamage = config.Bind(
                 damageNumbersSection,
                 "Absolute Minimum Damage",
                 5f,
-                "During the strongest load shedding, regular hits at or above this raw damage value are preserved even if recent peak damage is low.");
+                OptionCopy.AbsoluteMinimumDamage);
 
             peakDamageHalfLifeSeconds = config.Bind(
                 damageNumbersSection,
                 "Peak Damage Half Life Seconds",
                 1.75f,
-                "How quickly the recent peak damage estimate decays back down after large hits stop happening.");
+                OptionCopy.PeakHalfLife);
 
             preserveCriticalHits = config.Bind(
                 damageNumbersSection,
                 "Preserve Critical Hits",
                 true,
-                "Always allow critical hit damage numbers through the load shedding filter.");
+                OptionCopy.PreserveCrits);
 
             preserveImportantColors = config.Bind(
                 damageNumbersSection,
                 "Preserve Important Colors",
                 true,
-                "Always allow important color categories like heal and weak point through the load shedding filter.");
+                OptionCopy.PreserveColors);
 
-            damageNumbersProfile = SettingsProfiles.Begin(config, damageNumbersSection);
+            damageNumbersProfile = SettingsProfiles.Begin(config, damageNumbersSection, OptionCopy.DamageProfile);
             SettingsProfiles.Add(enableDamageNumberLoadShedding, true, true, true);
             SettingsProfiles.Add(softParticleCap, 256, 96, 32);
             SettingsProfiles.Add(hardParticleCap, 384, 144, 64);
@@ -205,45 +204,45 @@ namespace ROR_O
                 dynamicBonesSection,
                 "Enable Invisible Update Throttling",
                 true,
-                "Throttles DynamicBone LateUpdate calls when the affected renderers are offscreen.");
+                OptionCopy.BoneThrottle);
 
             dynamicBoneInvisibleUpdateInterval = config.Bind(
                 dynamicBonesSection,
                 "Invisible Update Interval",
                 8,
-                "When a DynamicBone is offscreen for a while, only let it fully update once every N frames.");
+                OptionCopy.BoneInvisibleInterval);
 
             dynamicBoneRecentlyVisibleGraceFrames = config.Bind(
                 dynamicBonesSection,
                 "Recently Visible Grace Frames",
                 8,
-                "Keeps DynamicBone updating normally for a short time after it leaves the screen to reduce visible popping.");
+                OptionCopy.BoneGrace);
 
             dynamicBoneVisibleMidDistance = config.Bind(
                 dynamicBonesSection,
                 "Visible Mid Distance",
                 18f,
-                "When a visible DynamicBone rig is at least this far from the camera, it can be updated less often.");
+                OptionCopy.BoneMidDistance);
 
             dynamicBoneVisibleFarDistance = config.Bind(
                 dynamicBonesSection,
                 "Visible Far Distance",
                 40f,
-                "When a visible DynamicBone rig is at least this far from the camera, it can be updated even less often.");
+                OptionCopy.BoneFarDistance);
 
             dynamicBoneVisibleMidUpdateInterval = config.Bind(
                 dynamicBonesSection,
                 "Visible Mid Update Interval",
                 2,
-                "When a visible DynamicBone rig is beyond the mid distance, only run a full LateUpdate once every N frames.");
+                OptionCopy.BoneMidInterval);
 
             dynamicBoneVisibleFarUpdateInterval = config.Bind(
                 dynamicBonesSection,
                 "Visible Far Update Interval",
                 4,
-                "When a visible DynamicBone rig is beyond the far distance, only run a full LateUpdate once every N frames.");
+                OptionCopy.BoneFarInterval);
 
-            dynamicBonesProfile = SettingsProfiles.Begin(config, dynamicBonesSection);
+            dynamicBonesProfile = SettingsProfiles.Begin(config, dynamicBonesSection, OptionCopy.BoneProfile);
             SettingsProfiles.Add(enableDynamicBoneInvisibleThrottling, true, true, true);
             SettingsProfiles.Add(dynamicBoneInvisibleUpdateInterval, 6, 8, 20);
             SettingsProfiles.Add(dynamicBoneRecentlyVisibleGraceFrames, 18, 8, 2);
@@ -259,34 +258,32 @@ namespace ROR_O
                 genericIkSection,
                 "Enable Invisible Update Throttling",
                 true,
-                "Throttles GenericIK LateUpdate calls when the animated character has been offscreen for a short time.");
+                OptionCopy.IkThrottle);
 
             genericIkInvisibleUpdateInterval = config.Bind(
                 genericIkSection,
                 "Invisible Update Interval",
                 4,
-                "When a GenericIK rig is offscreen, only let it run a full LateUpdate once every N frames.");
+                OptionCopy.IkInterval);
 
             genericIkRecentlyVisibleGraceFrames = config.Bind(
                 genericIkSection,
                 "Recently Visible Grace Frames",
                 4,
-                "Keeps GenericIK updating normally for a short time after it leaves the screen to reduce visible snapping.");
+                OptionCopy.IkGrace);
 
-            genericIkProfile = SettingsProfiles.Begin(config, genericIkSection);
+            genericIkProfile = SettingsProfiles.Begin(config, genericIkSection, OptionCopy.IkProfile);
             SettingsProfiles.Add(enableGenericIkInvisibleThrottling, true, true, true);
             SettingsProfiles.Add(genericIkInvisibleUpdateInterval, 2, 4, 15);
             SettingsProfiles.Add(genericIkRecentlyVisibleGraceFrames, 20, 4, 1);
             SettingsProfiles.End();
 
-            enableSpawnPrewarm = config.Bind(
-                "Spawns",
-                "Prewarm Stage Spawns",
-                true,
-                "Preloads the animator, avatar, and skins of monsters this stage can spawn, one monster per frame. Uses the game's own master preload and also includes bosses from that list. Takes effect on the next stage.");
+            SpawnPrewarm.Bind(config);
+            EffectRuntime.Bind(config);
 
             RiskOfOptionsIntegration.Hold(new RiskOfOptionsCatalog
             {
+                WarmupPace = WarmPaceSettings.Entry,
                 DamageNumbersProfile = damageNumbersProfile,
                 EnableDamageNumberLoadShedding = enableDamageNumberLoadShedding,
                 SoftParticleCap = softParticleCap,
@@ -316,13 +313,36 @@ namespace ROR_O
                 EnableGenericIkInvisibleThrottling = enableGenericIkInvisibleThrottling,
                 GenericIkInvisibleUpdateInterval = genericIkInvisibleUpdateInterval,
                 GenericIkRecentlyVisibleGraceFrames = genericIkRecentlyVisibleGraceFrames,
-                EnableSpawnPrewarm = enableSpawnPrewarm,
+                SpawnsProfile = SpawnPrewarm.Profile,
+                EnableSpawnPrewarm = SpawnPrewarm.EnableEntry,
+                WarmStageBosses = SpawnPrewarm.WarmBossesEntry,
+                SkipLongSpawnFrames = SpawnPrewarm.SkipLongFramesEntry,
+                ShowMobStatus = SpawnPrewarm.ShowStatusEntry,
+                LogMobStatus = SpawnPrewarm.LogStatusEntry,
+                LateSpawnImmunity = SpawnPrewarm.LateSpawnImmunityEntry,
+                EffectsProfile = EffectRuntime.Profile,
+                EnableEffectWarmup = EffectRuntime.WarmEffects,
+                KeepEffectPools = EffectRuntime.KeepPoolsEntry,
+                KeepEffectCopiesActive = EffectRuntime.KeepCopiesActiveEntry,
+                ActiveParkLimit = EffectRuntime.ActiveParkLimitEntry,
+                WarmFullPeak = EffectRuntime.WarmFullPeakEntry,
+                WarmShaders = EffectRuntime.WarmShadersEntry,
+                WarmPeakCopies = EffectRuntime.WarmPeakCopiesEntry,
+                // WarmAllEffectCopies = EffectRuntime.WarmAllCopiesEntry,
+                CullSecondaryEffects = EffectRuntime.CullSecondary,
+                EffectCullDistance = EffectRuntime.CullDistanceEntry,
+                CullEffectsOffScreen = EffectRuntime.CullOffScreenEntry,
+                EffectCullInterval = EffectRuntime.CullIntervalEntry,
+                ShowEffectStatus = EffectRuntime.ShowStatusEntry,
+                ShowShaderStatus = EffectRuntime.ShowShaderStatusEntry,
+                LogEffectStatus = EffectRuntime.LogStatusEntry,
             });
         }
     }
 
     [BepInPlugin(Modguid, ModName, ModVersion)]
     [BepInDependency("com.rune580.riskofoptions", BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency("droppod.lookingglass", BepInDependency.DependencyFlags.SoftDependency)]
     public sealed class RORO : BaseUnityPlugin
     {
         public static ManualLogSource? GlobalLogger { get; private set; }
@@ -339,7 +359,9 @@ namespace ROR_O
 
             var harmony = new Harmony(Modguid);
             harmony.PatchAll();
+            patches.mods.OptimizeLookingGlassPatch.Register(harmony);
             patches.OptimizeSphereSearch.Install(harmony);
+            EffectPools.Install(harmony);
             GlobalLogger.LogInfo("Harmony patches applied successfully!");
             patches.SkipUnchangedBuffTimerPatch.Register();
             HitchWatchStartup.Register(this);
@@ -347,6 +369,8 @@ namespace ROR_O
             patches.RegisterSteamP2PPatch.Register(this);
             RiskOfOptionsIntegration.Publish();
             gameObject.AddComponent<SpawnPrewarm>();
+            gameObject.AddComponent<EffectRuntime>();
+            gameObject.AddComponent<LoadingProgressView>();
         }
     }
 }

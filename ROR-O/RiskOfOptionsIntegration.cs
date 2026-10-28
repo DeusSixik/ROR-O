@@ -9,6 +9,7 @@ namespace ROR_O
 {
     internal sealed class RiskOfOptionsCatalog
     {
+        public ConfigEntry<WarmPace>? WarmupPace { get; set; }
         public ConfigEntry<SettingsProfiles.Profile>? DamageNumbersProfile { get; set; }
         public ConfigEntry<bool>? EnableDamageNumberLoadShedding { get; set; }
         public ConfigEntry<int>? SoftParticleCap { get; set; }
@@ -41,7 +42,29 @@ namespace ROR_O
         public ConfigEntry<int>? GenericIkRecentlyVisibleGraceFrames { get; set; }
         public ConfigEntry<bool>? EnableThreadedSteamP2P { get; set; }
         public ConfigEntry<bool>? EnableNetworkDebug { get; set; }
+        public ConfigEntry<SettingsProfiles.Profile>? SpawnsProfile { get; set; }
         public ConfigEntry<bool>? EnableSpawnPrewarm { get; set; }
+        public ConfigEntry<bool>? WarmStageBosses { get; set; }
+        public ConfigEntry<bool>? SkipLongSpawnFrames { get; set; }
+        public ConfigEntry<bool>? ShowMobStatus { get; set; }
+        public ConfigEntry<bool>? LogMobStatus { get; set; }
+        public ConfigEntry<bool>? LateSpawnImmunity { get; set; }
+        public ConfigEntry<SettingsProfiles.Profile>? EffectsProfile { get; set; }
+        public ConfigEntry<bool>? EnableEffectWarmup { get; set; }
+        public ConfigEntry<bool>? KeepEffectPools { get; set; }
+        public ConfigEntry<bool>? KeepEffectCopiesActive { get; set; }
+        public ConfigEntry<int>? ActiveParkLimit { get; set; }
+        public ConfigEntry<bool>? WarmFullPeak { get; set; }
+        public ConfigEntry<bool>? WarmShaders { get; set; }
+        public ConfigEntry<int>? WarmPeakCopies { get; set; }
+        // public ConfigEntry<bool>? WarmAllEffectCopies { get; set; }
+        public ConfigEntry<bool>? CullSecondaryEffects { get; set; }
+        public ConfigEntry<float>? EffectCullDistance { get; set; }
+        public ConfigEntry<bool>? CullEffectsOffScreen { get; set; }
+        public ConfigEntry<int>? EffectCullInterval { get; set; }
+        public ConfigEntry<bool>? ShowEffectStatus { get; set; }
+        public ConfigEntry<bool>? ShowShaderStatus { get; set; }
+        public ConfigEntry<bool>? LogEffectStatus { get; set; }
         public ConfigEntry<bool>? EnableHitchWatch { get; set; }
         public ConfigEntry<int>? HitchWatchTargetFps { get; set; }
         public ConfigEntry<bool>? EnableMonoProfiler { get; set; }
@@ -103,9 +126,9 @@ namespace ROR_O
             {
                 var menu = new Menu(assembly);
 #if DEBUG
-                menu.SetDescription("Performance options for damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately. The Mono Profiler switch applies on the next launch.");
+                menu.SetDescription("General holds warmup pace, the late-spawn buff, and the on-screen readouts. The other tabs are the performance options for effects, stage spawns, damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately. The Mono Profiler switch applies on the next launch.");
 #else
-                menu.SetDescription("Performance options for damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately.");
+                menu.SetDescription("General holds warmup pace, the late-spawn buff, and the on-screen readouts. The other tabs are the performance options for effects, stage spawns, damage numbers, Dynamic Bones, Generic IK, and Steam networking. Those apply during play. Hitch Watch applies immediately.");
 #endif
                 menu.SetIcon(LoadIcon());
                 AddEntries(menu, catalog);
@@ -119,6 +142,16 @@ namespace ROR_O
 
         private static void AddEntries(Menu menu, RiskOfOptionsCatalog catalog)
         {
+            string general = WarmPaceSettings.Section;
+            menu.Choice(catalog.WarmupPace);
+            menu.CheckBox(catalog.LateSpawnImmunity, null, "<color=#FFDD44>Late Spawn Immunity</color>", general);
+            menu.CheckBox(catalog.ShowMobStatus, null, null, general);
+            menu.CheckBox(catalog.LogMobStatus, null, null, general);
+            menu.CheckBox(catalog.ShowEffectStatus, null, null, general);
+            menu.CheckBox(catalog.ShowShaderStatus, null, "Show Shader Compile", general);
+            menu.CheckBox(catalog.LogEffectStatus, null, null, general);
+            menu.CheckBox(catalog.EnableNetworkDebug, null, "Network Debug Overlay", general);
+
             menu.Choice(catalog.DamageNumbersProfile);
             Func<bool> damageNumbersDisabled = () => catalog.EnableDamageNumberLoadShedding?.Value != true;
             menu.CheckBox(catalog.EnableDamageNumberLoadShedding);
@@ -155,8 +188,29 @@ namespace ROR_O
             menu.IntSlider(catalog.GenericIkInvisibleUpdateInterval, 2, 30, genericIkDisabled);
             menu.IntSlider(catalog.GenericIkRecentlyVisibleGraceFrames, 0, 120, genericIkDisabled);
             menu.CheckBox(catalog.EnableThreadedSteamP2P);
-            menu.CheckBox(catalog.EnableNetworkDebug);
+
+            menu.Choice(catalog.SpawnsProfile);
+            Func<bool> spawnPrewarmOff = () => catalog.EnableSpawnPrewarm?.Value != true;
             menu.CheckBox(catalog.EnableSpawnPrewarm);
+            menu.CheckBox(catalog.WarmStageBosses, spawnPrewarmOff);
+            menu.CheckBox(catalog.SkipLongSpawnFrames, spawnPrewarmOff);
+
+            menu.Choice(catalog.EffectsProfile);
+            Func<bool> effectWarmupOff = () => catalog.EnableEffectWarmup?.Value != true;
+            menu.CheckBox(catalog.EnableEffectWarmup);
+            menu.CheckBox(catalog.KeepEffectPools);
+            menu.CheckBox(catalog.KeepEffectCopiesActive);
+            menu.IntSlider(catalog.ActiveParkLimit, 0, 192, effectWarmupOff);
+            menu.CheckBox(catalog.WarmFullPeak, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm Full Observed Peak");
+            menu.CheckBox(catalog.WarmShaders, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm Effect Shaders");
+            menu.IntSlider(catalog.WarmPeakCopies, 0, 20, effectWarmupOff);
+            // menu.CheckBox(catalog.WarmAllEffectCopies, effectWarmupOff, "<color=#FFDD44>[Experimental]</color> Warm All Effect Copies");
+            Func<bool> effectCullOff = () => catalog.CullSecondaryEffects?.Value != true;
+            menu.CheckBox(catalog.CullSecondaryEffects);
+            menu.StepSlider(catalog.EffectCullDistance, 10f, 200f, 5f, "0", effectCullOff);
+            menu.CheckBox(catalog.CullEffectsOffScreen, effectCullOff);
+            menu.IntSlider(catalog.EffectCullInterval, 1, 20, effectCullOff);
+
             menu.CheckBox(catalog.EnableHitchWatch);
             menu.IntSlider(catalog.HitchWatchTargetFps, 30, 240, () => catalog.EnableHitchWatch?.Value != true);
 #if DEBUG
@@ -242,18 +296,25 @@ namespace ROR_O
                 Add("RiskOfOptions.Options.ChoiceOption", entry, config);
             }
 
-            public void CheckBox(ConfigEntry<bool>? entry, Func<bool>? disabledWhen = null)
+            public void CheckBox(ConfigEntry<bool>? entry, Func<bool>? disabledWhen = null, string? displayName = null, string? category = null)
             {
                 if (entry == null)
                 {
                     return;
                 }
 
-                object? config = disabledWhen == null ? null : CreateConfig("RiskOfOptions.OptionConfigs.CheckBoxConfig", entry, disabledWhen);
+                object? config = disabledWhen == null && displayName == null && category == null
+                    ? null
+                    : CreateConfig("RiskOfOptions.OptionConfigs.CheckBoxConfig", entry, disabledWhen, category);
+                if (config != null && displayName != null)
+                {
+                    Set(config, "name", displayName);
+                }
+
                 Add("RiskOfOptions.Options.CheckBoxOption", entry, config);
             }
 
-            public void IntSlider(ConfigEntry<int>? entry, int min, int max, Func<bool>? disabledWhen = null)
+            public void IntSlider(ConfigEntry<int>? entry, int min, int max, Func<bool>? disabledWhen = null, string? displayName = null)
             {
                 if (entry == null)
                 {
@@ -263,6 +324,11 @@ namespace ROR_O
                 object config = CreateConfig("RiskOfOptions.OptionConfigs.IntSliderConfig", entry, disabledWhen);
                 Set(config, "min", min);
                 Set(config, "max", max);
+                if (displayName != null)
+                {
+                    Set(config, "name", displayName);
+                }
+
                 Add("RiskOfOptions.Options.IntSliderOption", entry, config);
             }
 
@@ -277,8 +343,12 @@ namespace ROR_O
                 Set(config, "min", min);
                 Set(config, "max", max);
                 Set(config, "increment", increment);
-                Set(config, "formatString", format);
-                config.GetType().GetProperty("FormatString", FieldFlags)?.SetValue(config, format);
+                // RiskOfOptions runs string.Format(culture, FormatString, value), so the format must
+                // carry the placeholder. Callers pass a bare "0.00", which formats to the literal
+                // text "0" whatever the slider does.
+                string wrapped = format.Contains("{0") ? format : "{0:" + format + "}";
+                Set(config, "formatString", wrapped);
+                config.GetType().GetProperty("FormatString", FieldFlags)?.SetValue(config, wrapped);
                 Add("RiskOfOptions.Options.StepSliderOption", entry, config);
             }
 
@@ -291,11 +361,11 @@ namespace ROR_O
                 addOption.Invoke(null, new[] { option });
             }
 
-            private object CreateConfig(string configTypeName, ConfigEntryBase entry, Func<bool>? disabledWhen)
+            private object CreateConfig(string configTypeName, ConfigEntryBase entry, Func<bool>? disabledWhen, string? category = null)
             {
                 object config = Activator.CreateInstance(RequireType(configTypeName))
                     ?? throw new MissingMethodException(configTypeName);
-                Set(config, "category", entry.Definition.Section);
+                Set(config, "category", string.IsNullOrEmpty(category) ? entry.Definition.Section : category);
                 if (disabledWhen != null)
                 {
                     Delegate callback = Delegate.CreateDelegate(disabledDelegateType, disabledWhen.Target, disabledWhen.Method);

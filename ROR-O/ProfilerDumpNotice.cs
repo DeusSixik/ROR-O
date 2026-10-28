@@ -13,7 +13,9 @@ namespace ROR_O
     {
         private const float FailureDelaySeconds = 0.75f;
         private const float VisibleSeconds = 5f;
-        private const float IdlePollSeconds = 0.5f;
+        // Two seconds is soon enough for a saved-dump notice; polling the game directory
+        // twice a second showed up in the profiler it reports on.
+        private const float IdlePollSeconds = 2f;
 
         private readonly HashSet<string> knownDumps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private ConfigEntry<KeyboardShortcut>? dumpKey;

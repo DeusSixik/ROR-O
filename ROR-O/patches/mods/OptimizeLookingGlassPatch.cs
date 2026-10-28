@@ -8,17 +8,40 @@ using RoR2;
 
 namespace ROR_O.patches.mods
 {
-    [HarmonyPatch]
     public class OptimizeLookingGlassPatch
     {
         internal static readonly Dictionary<string, string> DescriptionCache = new Dictionary<string, string>();
-        
-        static MethodBase? TargetMethod()
+        internal static bool Applied;
+
+        // PatchAll reflects every HarmonyPatch method. Prefix names LookingGlass types, and that
+        // reflection throws FileNotFoundException when the mod is not installed, aborting Awake
+        // before Risk of Options is published. Apply this patch only after the assembly is loaded.
+        internal static void Register(Harmony harmony)
         {
-            var type = AccessTools.TypeByName("LookingGlass.ItemStatsNameSpace.ItemStats");
-            if (type == null) return null;
-            RORO.GlobalLogger?.LogInfo("Mod LookingGlass found! Apply patch !");
-            return AccessTools.Method(type, "GetItemDescription");
+            try
+            {
+                Type? type = AccessTools.TypeByName("LookingGlass.ItemStatsNameSpace.ItemStats");
+                if (type == null)
+                {
+                    return;
+                }
+
+                MethodInfo? target = AccessTools.DeclaredMethod(type, "GetItemDescription");
+                MethodInfo? prefix = AccessTools.DeclaredMethod(typeof(OptimizeLookingGlassPatch), nameof(Prefix));
+                if (target == null || prefix == null)
+                {
+                    RORO.GlobalLogger?.LogWarning("LookingGlass is loaded, but GetItemDescription could not be patched.");
+                    return;
+                }
+
+                harmony.Patch(target, new HarmonyMethod(prefix));
+                Applied = true;
+                RORO.GlobalLogger?.LogInfo("Mod LookingGlass found! Apply patch !");
+            }
+            catch (Exception exception)
+            {
+                RORO.GlobalLogger?.LogError($"LookingGlass description patch was skipped: {exception}");
+            }
         }
         
         static bool Prefix(ItemDef itemDef, int newItemCount, CharacterMaster master, bool withOneMore, bool forceNew,
@@ -220,6 +243,11 @@ namespace ROR_O.patches.mods
         [HarmonyPostfix]
         public static void Postfix()
         {
+            if (!OptimizeLookingGlassPatch.Applied)
+            {
+                return;
+            }
+
             OptimizeLookingGlassPatch.DescriptionCache.Clear();
             RORO.GlobalLogger?.LogInfo("The LookingGlass cache has been successfully cleared for a new race!");
         }

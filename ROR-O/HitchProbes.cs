@@ -16,6 +16,11 @@ namespace ROR_O
             Anim,
             Canvas,
             Skin,
+            Finish,
+            Renderers,
+            Present,
+            Scene,
+            UiCam,
             Count
         }
 
@@ -33,6 +38,13 @@ namespace ROR_O
             PathAgent,
             Prewarm,
             DynBone,
+            EffectPin,
+            EffectWarm,
+            EffectCull,
+            EffectPeak,
+            ElitePin,
+            SpawnImmunity,
+            ProgressRings,
             Count
         }
 
@@ -42,7 +54,12 @@ namespace ROR_O
             "n.part",
             "n.anim",
             "n.canvas",
-            "n.skin"
+            "n.skin",
+            "n.finish",
+            "n.rndrs",
+            "n.present",
+            "n.scene",
+            "n.uicam"
         };
 
         private static readonly string[] MethodNames =
@@ -58,7 +75,14 @@ namespace ROR_O
             "BaseAI.ManagedFixedUpdate",
             "NodeGraphNavigation.UpdateAgent",
             "SpawnPrewarm.PreloadAssets",
-            "DynamicBone.LateUpdate"
+            "DynamicBone.LateUpdate",
+            "EffectRuntime.Pin",
+            "EffectRuntime.Warm",
+            "EffectRuntime.Cull",
+            "EffectRuntime.NoteSpawn",
+            "SpawnPrewarm.EliteDisplays",
+            "SpawnPrewarm.LateImmunity",
+            "LoadingProgress.Rings"
         };
 
         private static readonly long[] PhaseLive = new long[(int)Phase.Count];
@@ -95,6 +119,16 @@ namespace ROR_O
             {
                 MethodLive[index] += ticks;
             }
+        }
+
+        internal static void Note(Id id, long started)
+        {
+            if (!Armed || started == 0L)
+            {
+                return;
+            }
+
+            Add(id, Stopwatch.GetTimestamp() - started);
         }
 
         internal static void PublishFrame()

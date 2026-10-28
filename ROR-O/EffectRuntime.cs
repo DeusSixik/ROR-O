@@ -1,0 +1,1993 @@
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Text;
+using BepInEx.Configuration;
+using RoR2;
+using RoR2.ContentManagement;
+using UnityEngine;
+using UnityEngine.AddressableAssets;
+using UnityEngine.Networking;
+using UnityEngine.ResourceManagement.AsyncOperations;
+using UnityEngine.SceneManagement;
+
+namespace ROR_O
+{
+    // EffectDef loads its prefab as a Preload address. The next scene change puts that address on a 12 second
+    // release list, and the next spawn then waits for the load inside SpawnEffect. Idle pools are destroyed
+    // 45 seconds after their last use, so the following spawn instantiates a new copy. This pins the address
+    // for the run. Pool copies are not built for the whole catalog: a spawn records how many copies of that
+    // effect were checked out at once, and calm frames later build up to that observed peak for the effects
+    // this run actually uses, so the next burst reuses copies instead of instantiating in combat.
+    internal sealed class EffectRuntime : MonoBehaviour
+    {
+        private const float CalmFrameSeconds = 0.012f;
+        // A warm is an Instantiate plus EffectManagerHelper.Initialize on the main thread. Never start
+        // one on a frame that is already a hitch, and after the opening window combat gets at most
+        // one warm per interval instead of one on every calm frame.
+        private const float HitchFrameSeconds = 0.033f;
+        private const float BusyWarmIntervalSeconds = 0.5f;
+        private const float ExpensiveWarmMs = 3f;
+        private static readonly Vector3 Park = new Vector3(0f, -5000f, 0f);
+        private static readonly Vector3 CullBounds = new Vector3(12f, 12f, 12f);
+        private static readonly Plane[] Frustum = new Plane[6];
+
+        private static ConfigEntry<bool>? warmEffects;
+        private static ConfigEntry<bool>? keepPools;
+        private static ConfigEntry<bool>? keepCopiesActive;
+        private static ConfigEntry<int>? activeParkLimit;
+        private static ConfigEntry<bool>? warmFullPeak;
+        private static ConfigEntry<bool>? warmShaders;
+        private static ConfigEntry<int>? warmPeakCopies;
+        private static ConfigEntry<bool>? cullSecondary;
+        private static ConfigEntry<float>? cullDistance;
+        private static ConfigEntry<bool>? cullOffScreen;
+        private static ConfigEntry<int>? cullInterval;
+        private static ConfigEntry<bool>? showStatus;
+        private static ConfigEntry<bool>? showShaderStatus;
+        private static ConfigEntry<bool>? logStatus;
+        private static float nextLogTime;
+
+        private static readonly StringBuilder statusBuilder = new StringBuilder(384);
+        private static readonly Dictionary<VFXAttributes, EffectCullState> gates = new Dictionary<VFXAttributes, EffectCullState>();
+        private static readonly Queue<int> warmQueue = new Queue<int>();
+        // Reused across warms: checking out several helpers at once is the only way to make a pool
+        // grow past the copies it already holds. Returning each one immediately re-pops the same copy.
+        private static readonly List<EffectManagerHelper> heldHelpers = new List<EffectManagerHelper>(4);
+
+        private static AsyncOperationHandle<GameObject>[] handles = System.Array.Empty<AsyncOperationHandle<GameObject>>();
+        private static bool[] directPins = System.Array.Empty<bool>();
+        private static AssetReferenceT<GameObject>?[] addresses = System.Array.Empty<AssetReferenceT<GameObject>?>();
+        private static GameObject?[] prefabs = System.Array.Empty<GameObject?>();
+        private static byte[] warmed = System.Array.Empty<byte>();
+        private static bool[] settled = System.Array.Empty<bool>();
+        private static int[] peakInUse = System.Array.Empty<int>();
+        private static bool[] queued = System.Array.Empty<bool>();
+
+        private static int pinCursor;
+        private static bool directPinFailed;
+        private static int warmedPrefabs;
+        private static int instancesBuilt;
+        private static int shaderCursor;
+        private static readonly List<Shader> pinnedShaders = new List<Shader>();
+        private static readonly List<AsyncOperationHandle<GameObject>> shaderHolds = new List<AsyncOperationHandle<GameObject>>();
+        private static readonly List<GameObject> shaderHoldPrefabs = new List<GameObject>();
+        private static bool[] shaderHeld = System.Array.Empty<bool>();
+        private static readonly List<string> shaderTraceLines = new List<string>(6);
+        private static readonly List<Material> drawMaterials = new List<Material>(8);
+        private static int shaderWarmCalls;
+        private static int shaderSlowRenders;
+        private static long shaderWarmMicroseconds;
+        private static EffectRuntime? runtime;
+        private static Transform? warmRoot;
+        private static Camera? warmCamera;
+        private static RenderTexture? warmTarget;
+        private static Mesh? warmMesh;
+        private const int WarmLayer = 31;
+        private static readonly Vector3 WarmSpot = new Vector3(0f, -8000f, 0f);
+        private static float shaderStatusRefresh;
+        private static string shaderStatusText = "Shader compile status is not ready yet.";
+        private static int culledEffects;
+        private static int frame;
+        private static float lastWarmTime;
+        private static float warmNotBefore;
+        private static bool frustumReady;
+        private static float sceneReadyTime;
+        private static Camera? gameplayCamera;
+        private static bool cullWasEnabled;
+        private static Run? observedRun;
+        private static float lastStatusRefresh;
+        private static string statusText = "Effect status is not ready yet.";
+        private static GUIStyle? statusStyle;
+        private static GUIStyle? shaderStyle;
+
+        internal static ConfigEntry<SettingsProfiles.Profile>? Profile { get; private set; }
+        internal static ConfigEntry<bool>? WarmEffects => warmEffects;
+        internal static ConfigEntry<bool>? KeepPoolsEntry => keepPools;
+        internal static ConfigEntry<bool>? KeepCopiesActiveEntry => keepCopiesActive;
+        internal static ConfigEntry<int>? ActiveParkLimitEntry => activeParkLimit;
+        internal static ConfigEntry<bool>? WarmFullPeakEntry => warmFullPeak;
+        internal static ConfigEntry<bool>? WarmShadersEntry => warmShaders;
+        internal static ConfigEntry<int>? WarmPeakCopiesEntry => warmPeakCopies;
+        internal static ConfigEntry<bool>? CullSecondary => cullSecondary;
+        internal static ConfigEntry<float>? CullDistanceEntry => cullDistance;
+        internal static ConfigEntry<bool>? CullOffScreenEntry => cullOffScreen;
+        internal static ConfigEntry<int>? CullIntervalEntry => cullInterval;
+        internal static ConfigEntry<bool>? ShowStatusEntry => showStatus;
+        internal static ConfigEntry<bool>? ShowShaderStatusEntry => showShaderStatus;
+        internal static bool ShowShaderStatus => showShaderStatus?.Value == true;
+        internal const float ShaderStatusBlockHeight = 250f;
+        internal static ConfigEntry<bool>? LogStatusEntry => logStatus;
+
+        internal static bool KeepPools => keepPools?.Value ?? true;
+        internal static bool KeepCopiesActive => keepCopiesActive?.Value == true;
+        internal static int ActiveParkLimit => activeParkLimit != null ? Clamp(activeParkLimit.Value, 0, 192) : 96;
+
+        internal static void Bind(ConfigFile config)
+        {
+            const string section = "Effects";
+
+            warmEffects = config.Bind(
+                section,
+                "Warm Effect Prefabs",
+                true,
+                OptionCopy.EffectWarm);
+
+            keepPools = config.Bind(
+                section,
+                "Keep Effect Pools",
+                true,
+                OptionCopy.KeepPools);
+
+            keepCopiesActive = config.Bind(
+                section,
+                "Keep Effect Copies Active",
+                true,
+                OptionCopy.KeepCopiesActive);
+
+            activeParkLimit = config.Bind(
+                section,
+                "Active Parked Copies",
+                96,
+                OptionCopy.ParkLimit);
+
+            warmFullPeak = config.Bind(
+                section,
+                "Warm Full Observed Peak",
+                false,
+                OptionCopy.WarmFullPeak);
+
+            warmShaders = config.Bind(
+                section,
+                "Warm Effect Shaders",
+                false,
+                OptionCopy.WarmShaders);
+
+            warmPeakCopies = config.Bind(
+                section,
+                "Warm Peak Copies",
+                4,
+                OptionCopy.WarmPeakCopies);
+
+            // Warm All Effect Copies instantiated every poolable effect at stage start, up to
+            // Warm Peak Copies each. That pass stalled the opening, so it is not bound.
+            // warmAllCopies = config.Bind(
+            //     section,
+            //     "Warm All Effect Copies",
+            //     false,
+            //     "At the start of a stage, instantiates inactive copies of every poolable effect, up to Warm Peak Copies each, instead of only the effects this run has already used. Copies are scene objects, so this runs after the loading screen, and it can stall the opening of a stage.");
+
+            cullSecondary = config.Bind(
+                section,
+                "Cull Secondary Effects",
+                true,
+                OptionCopy.CullSecondary);
+
+            cullDistance = config.Bind(
+                section,
+                "Cull Distance",
+                55f,
+                OptionCopy.CullDistance);
+
+            cullOffScreen = config.Bind(
+                section,
+                "Cull Off Screen",
+                true,
+                OptionCopy.CullOffScreen);
+
+            cullInterval = config.Bind(
+                section,
+                "Cull Interval",
+                4,
+                OptionCopy.CullInterval);
+
+            showStatus = config.Bind(
+                section,
+                "Show Effect Status",
+                false,
+                OptionCopy.EffectStatus);
+
+            showShaderStatus = config.Bind(
+                section,
+                "Show Shader Compile",
+                false,
+                OptionCopy.ShaderStatus);
+
+            logStatus = config.Bind(
+                section,
+                "Log Effect Status",
+                false,
+                OptionCopy.EffectLog);
+
+            Profile = SettingsProfiles.Begin(config, section, OptionCopy.EffectProfile);
+            SettingsProfiles.Add(warmEffects, true, true, true);
+            SettingsProfiles.Add(keepPools, true, true, true);
+            SettingsProfiles.Add(keepCopiesActive, true, true, true);
+            SettingsProfiles.Add(activeParkLimit, 96, 96, 96);
+            SettingsProfiles.Add(warmFullPeak, false, false, false);
+            SettingsProfiles.Add(warmShaders, false, false, false);
+            SettingsProfiles.Add(warmPeakCopies, 2, 4, 6);
+            // SettingsProfiles.Add(warmAllCopies, false, false, false);
+            SettingsProfiles.Add(cullSecondary, false, true, true);
+            SettingsProfiles.Add(cullDistance, 80f, 55f, 28f);
+            SettingsProfiles.Add(cullOffScreen, false, true, true);
+            SettingsProfiles.Add(cullInterval, 8, 4, 2);
+            SettingsProfiles.End();
+        }
+
+        private static void LogStatus()
+        {
+            RefreshStatus();
+            RORO.GlobalLogger?.LogInfo(statusText.Replace('\n', ' '));
+        }
+
+        internal static void NoteEffectDisabled(VFXAttributes attributes)
+        {
+            if (!attributes || !gates.TryGetValue(attributes, out EffectCullState? gate) || gate == null)
+            {
+                return;
+            }
+
+            gates.Remove(attributes);
+            if (!gate.secondaryStopped)
+            {
+                return;
+            }
+
+            // Pooling disables the effect while lights are still off. Reset restarts particles
+            // on the next spawn and does not touch these lights, so restore them here.
+            RestoreLights(attributes.optionalLights, gate);
+            gate.secondaryStopped = false;
+            if (culledEffects > 0)
+            {
+                culledEffects--;
+            }
+        }
+
+        // Postfix on SpawnEffect. The pool has already checked this copy out, so InUseCount is the
+        // live concurrency of that effect. Only a new peak queues work; the common spawn costs one
+        // array read and one dictionary count.
+        internal static void NoteEffectSpawned(EffectIndex effectIndex)
+        {
+            int index = (int)effectIndex;
+            if (warmEffects?.Value != true)
+            {
+                return;
+            }
+
+            if (index < 0 || index >= peakInUse.Length)
+            {
+                return;
+            }
+
+            long started = HitchProbes.Armed ? Stopwatch.GetTimestamp() : 0L;
+            try
+            {
+                NoteSpawn(index);
+            }
+            finally
+            {
+                HitchProbes.Note(HitchProbes.Id.EffectPeak, started);
+            }
+        }
+
+        private static void NoteSpawn(int index)
+        {
+            GameObject? prefab = prefabs[index];
+            if (!prefab)
+            {
+                AsyncOperationHandle<GameObject> handle = handles[index];
+                if (!handle.IsValid() || !handle.IsDone)
+                {
+                    return;
+                }
+
+                prefab = handle.Result;
+                if (!prefab)
+                {
+                    return;
+                }
+
+                prefabs[index] = prefab;
+            }
+
+            // The pool was created with EffectDef.prefab. The pin can be a second load of the
+            // same address, and the hot-spawn count is a dictionary on the object reference.
+            GameObject? counted = prefab;
+            EffectDef? spawned = EffectCatalog.GetEffectDef((EffectIndex)index);
+            if (spawned != null && spawned.prefab)
+            {
+                counted = spawned.prefab;
+            }
+
+            EffectPools.NotePrefabSpawn(counted);
+            int inUse = EffectPools.CheckoutCount(counted);
+            if (inUse <= peakInUse[index])
+            {
+                return;
+            }
+
+            peakInUse[index] = inUse;
+            EnqueueWarm(index);
+        }
+
+        private static void EnqueueWarm(int index)
+        {
+            if (index < 0 || index >= queued.Length || queued[index])
+            {
+                return;
+            }
+
+            queued[index] = true;
+            warmQueue.Enqueue(index);
+        }
+
+        private void OnEnable()
+        {
+            runtime = this;
+            SceneManager.sceneLoaded += OnSceneLoaded;
+            SceneManager.sceneUnloaded += OnSceneUnloaded;
+            Run.onRunDestroyGlobal += OnRunDestroy;
+        }
+
+        private void OnDisable()
+        {
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+            SceneManager.sceneUnloaded -= OnSceneUnloaded;
+            Run.onRunDestroyGlobal -= OnRunDestroy;
+            if (runtime == this)
+            {
+                runtime = null;
+            }
+
+            ReleaseDirectPins();
+            ReleaseShaderHolds();
+        }
+
+        private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            if (mode != LoadSceneMode.Single)
+            {
+                return;
+            }
+
+            // Scene unload already destroyed the pool copies. Pins stay valid across a stage change
+            // because they are held until the run ends, and the peaks stay valid for the same run,
+            // so the copies this run needs are queued to be built again on the new stage.
+            EffectPools.ResetParkedActive();
+            pinCursor = 0;
+            warmedPrefabs = 0;
+            instancesBuilt = 0;
+            warmNotBefore = 0f;
+            sceneReadyTime = Time.unscaledTime;
+            System.Array.Clear(warmed, 0, warmed.Length);
+            System.Array.Clear(settled, 0, settled.Length);
+            System.Array.Clear(prefabs, 0, prefabs.Length);
+            warmQueue.Clear();
+            System.Array.Clear(queued, 0, queued.Length);
+            for (int i = 0; i < peakInUse.Length; i++)
+            {
+                if (peakInUse[i] > 0)
+                {
+                    EnqueueWarm(i);
+                }
+            }
+        }
+
+        private static void OnSceneUnloaded(Scene scene)
+        {
+            gates.Clear();
+            culledEffects = 0;
+            cullWasEnabled = false;
+            gameplayCamera = null;
+        }
+
+        private void Update()
+        {
+            MaybeLogStatus();
+            if (warmEffects?.Value != true || !EffectCatalog.availability.available)
+            {
+                return;
+            }
+
+            if (EffectManager.DisableAllEffectSpawning)
+            {
+                return;
+            }
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            if (LoadingPhase.BlocksWarmup(sceneName))
+            {
+                return;
+            }
+
+            int count = EnsureCatalog();
+            if (count == 0)
+            {
+                return;
+            }
+
+            // Warmup Pace decides how many prefabs to start, including on the character select.
+            // A single pin used to scan every assembly and freeze the frame; the loader is
+            // resolved at plugin load, so a pin here is only the asset start. Several cheap
+            // starts fit on one frame. One start that already ran long ends the burst.
+            bool loading = LoadingPhase.IsLoading;
+            float frameSeconds = Time.unscaledDeltaTime;
+            bool frameBlocked = !loading && (frameSeconds > HitchFrameSeconds || Time.unscaledTime < warmNotBefore);
+            if (!frameBlocked && pinCursor < count)
+            {
+                int loadBudget = WarmPaceSettings.EffectLoadsPerFrame;
+                int startedLoads = 0;
+                long pinStart = Stopwatch.GetTimestamp();
+                while (startedLoads < loadBudget && pinCursor < count)
+                {
+                    if (!Pin(pinCursor))
+                    {
+                        break;
+                    }
+
+                    pinCursor++;
+                    startedLoads++;
+                    if (!loading)
+                    {
+                        float burstMs = (float)((Stopwatch.GetTimestamp() - pinStart) * 1000d / Stopwatch.Frequency);
+                        if (burstMs > ExpensiveWarmMs)
+                        {
+                            float cooldown = burstMs * 0.008f;
+                            warmNotBefore = Time.unscaledTime + (cooldown > 1f ? 1f : cooldown);
+                            break;
+                        }
+                    }
+                    else if (LoadingPhase.BudgetExpired(pinStart, startedLoads))
+                    {
+                        break;
+                    }
+                }
+
+                HitchProbes.Note(HitchProbes.Id.EffectPin, pinStart);
+            }
+
+            LoadingProgress.Set("Effect prefabs", pinCursor, count, pinCursor < count);
+            // The GPU program stays on the shader while a prefab still references it. Outside the
+            // fade, one hidden render per short frame. Splash, intro, and title never reach here.
+            if (warmShaders?.Value == true && shaderCursor < count && (loading || !frameBlocked))
+            {
+                WarmShaderStep(count, loading);
+            }
+
+            if (loading)
+            {
+                return;
+            }
+
+            // Copies are built only after a run exists. Doing it in the menu instantiates effects
+            // into the lobby scene, and the lobby's own effect is one of those prefabs.
+            Run? run = Run.instance;
+            if (!run)
+            {
+                return;
+            }
+
+            // Peaks describe one run's content. A new run object starts a fresh set, so copies are
+            // not built for effects only a previous run ever spawned.
+            if (observedRun != run)
+            {
+                observedRun = run;
+                System.Array.Clear(peakInUse, 0, peakInUse.Length);
+                System.Array.Clear(warmed, 0, warmed.Length);
+                warmQueue.Clear();
+                System.Array.Clear(queued, 0, queued.Length);
+            }
+
+            int waiting = warmQueue.Count;
+            if (waiting == 0)
+            {
+                PublishCopyProgress(0);
+                return;
+            }
+
+            // The first seconds of a stage are still quiet enough to rebuild copies this run
+            // has already used. Combat after that waits out a long frame and spaces warms.
+            bool opening = Time.unscaledTime - sceneReadyTime < 15f;
+            if (frameBlocked)
+            {
+                PublishCopyProgress(waiting);
+                return;
+            }
+
+            bool busy = CharacterBody.readOnlyInstancesList.Count > 1;
+            bool calm = frameSeconds <= CalmFrameSeconds;
+            bool throttled = Time.unscaledTime - lastWarmTime < BusyWarmIntervalSeconds;
+            bool combatWait = !opening && busy;
+            if (throttled && (combatWait || !calm))
+            {
+                PublishCopyProgress(waiting);
+                return;
+            }
+
+            int budget = WarmPaceSettings.EffectWarmsPerFrame;
+            int built = 0;
+            int checks = waiting;
+            long frameStart = Stopwatch.GetTimestamp();
+            int processed = 0;
+            while (checks-- > 0 && warmQueue.Count > 0)
+            {
+                if (built >= budget)
+                {
+                    break;
+                }
+
+                int index = warmQueue.Dequeue();
+                processed++;
+                if (index >= queued.Length)
+                {
+                    continue;
+                }
+
+                queued[index] = false;
+                if (TryWarm(index))
+                {
+                    built++;
+                    lastWarmTime = Time.unscaledTime;
+                }
+                else if (!settled[index] && warmed[index] < PeakTarget(index))
+                {
+                    // Prefab still loading. Requeue once per frame at most: the snapshot count
+                    // above keeps this from spinning inside one Update.
+                    EnqueueWarm(index);
+                }
+            }
+
+            if (processed > 0)
+            {
+                HitchProbes.Note(HitchProbes.Id.EffectWarm, frameStart);
+            }
+
+            PublishCopyProgress(warmQueue.Count);
+        }
+
+        private static void PublishCopyProgress(int waiting)
+        {
+            int done = warmedPrefabs;
+            int total = warmedPrefabs + waiting;
+            if (done < 0)
+            {
+                done = 0;
+            }
+
+            LoadingProgress.Set("Effect copies", done, total, waiting > 0);
+        }
+
+        private static void MaybeLogStatus()
+        {
+            if (logStatus?.Value != true)
+            {
+                nextLogTime = 0f;
+                return;
+            }
+
+            float now = Time.unscaledTime;
+            if (nextLogTime != 0f && now < nextLogTime)
+            {
+                return;
+            }
+
+            nextLogTime = now + 1f;
+            LogStatus();
+        }
+
+        private void LateUpdate()
+        {
+            // The menu and lobby have their own long-lived effects. Culling those, or holding a camera
+            // from the previous scene, both breaks the lobby effect and throws once that camera is gone.
+            bool inRun = (bool)Run.instance;
+            bool enabled = inRun && cullSecondary?.Value == true;
+            if (!enabled)
+            {
+                if (cullWasEnabled || culledEffects > 0)
+                {
+                    ResumeAll();
+                    cullWasEnabled = false;
+                }
+
+                return;
+            }
+
+            cullWasEnabled = true;
+            int interval = Clamp(cullInterval?.Value ?? 4, 1, 30);
+            frame++;
+            if (frame % interval != 0)
+            {
+                return;
+            }
+
+            if (!gameplayCamera)
+            {
+                gameplayCamera = Camera.main;
+            }
+
+            long cullStart = HitchProbes.Armed ? Stopwatch.GetTimestamp() : 0L;
+            Camera? camera = gameplayCamera;
+            if (!camera)
+            {
+                HitchProbes.Note(HitchProbes.Id.EffectCull, cullStart);
+                return;
+            }
+
+            float distance = Mathf.Max(5f, cullDistance?.Value ?? 55f);
+            float stopSqr = distance * distance;
+            float resume = distance * 0.75f;
+            float resumeSqr = resume * resume;
+            bool offScreen = cullOffScreen?.Value == true;
+            // Frustum planes are built on first use inside Consider. A pass where every live
+            // effect is already past the cull distance never needs them.
+            frustumReady = false;
+
+            Vector3 cameraPosition = camera!.transform.position;
+            ReadOnlyCollection<VFXAttributes> live = VFXAttributes.readonlyVFXList;
+            for (int i = 0; i < live.Count; i++)
+            {
+                VFXAttributes? attributes = live[i];
+                if (!attributes)
+                {
+                    continue;
+                }
+
+                Consider(attributes, cameraPosition, stopSqr, resumeSqr, offScreen);
+            }
+
+            HitchProbes.Note(HitchProbes.Id.EffectCull, cullStart);
+        }
+
+        private void OnGUI()
+        {
+            if (showShaderStatus?.Value == true)
+            {
+                if (Time.unscaledTime - shaderStatusRefresh >= 0.5f)
+                {
+                    shaderStatusRefresh = Time.unscaledTime;
+                    RefreshShaderStatus();
+                }
+
+                shaderStyle ??= new GUIStyle(GUI.skin.label)
+                {
+                    fontSize = 14,
+                    wordWrap = true
+                };
+                shaderStyle.normal.textColor = Color.white;
+                float width = 740f;
+                GUI.Label(new Rect(Screen.width - width - 16f, 16f + LoadingProgressView.BlockHeight, width, ShaderStatusBlockHeight), shaderStatusText, shaderStyle);
+            }
+
+            if (showStatus?.Value != true)
+            {
+                return;
+            }
+
+            // OnGUI fires several times per frame, so a frame-count gate still rebuilt the
+            // counts many times a second. The profiler put that at over a millisecond a call.
+            if (Time.unscaledTime - lastStatusRefresh >= 0.5f)
+            {
+                lastStatusRefresh = Time.unscaledTime;
+                RefreshStatus();
+            }
+
+            if (statusStyle == null)
+            {
+                statusStyle = new GUIStyle(GUI.skin.label)
+                {
+                    fontSize = 14,
+                    wordWrap = false
+                };
+                statusStyle.normal.textColor = Color.white;
+            }
+
+            GUI.Label(new Rect(16f, 16f + LoadingProgressView.BlockHeight, 720f, 180f), statusText, statusStyle);
+        }
+
+        private static int EnsureCatalog()
+        {
+            int count = EffectCatalog.effectCount;
+            if (count == handles.Length && count == directPins.Length)
+            {
+                return count;
+            }
+
+            ReleaseDirectPins();
+            handles = new AsyncOperationHandle<GameObject>[count];
+            directPins = new bool[count];
+            addresses = new AssetReferenceT<GameObject>?[count];
+            prefabs = new GameObject?[count];
+            warmed = new byte[count];
+            settled = new bool[count];
+            peakInUse = new int[count];
+            queued = new bool[count];
+            warmQueue.Clear();
+            pinCursor = 0;
+            warmedPrefabs = 0;
+            instancesBuilt = 0;
+            ForgetShaderWarmup(true);
+            shaderHeld = new bool[count];
+            return count;
+        }
+
+        private static bool Pin(int index)
+        {
+            if (settled[index] || prefabs[index] || handles[index].IsValid())
+            {
+                return true;
+            }
+
+            AssetReferenceT<GameObject>? knownAddress = addresses[index];
+            if (knownAddress != null)
+            {
+                return StartPin(index, knownAddress);
+            }
+
+            EffectDef? def = EffectCatalog.GetEffectDef((EffectIndex)index);
+            if (def == null)
+            {
+                settled[index] = true;
+                return true;
+            }
+
+            AssetOrDirectReference<GameObject>? reference = EffectPools.PrefabReference(def);
+            if (reference == null)
+            {
+                settled[index] = true;
+                return true;
+            }
+
+            AssetReferenceT<GameObject>? address = reference.address;
+            if (address != null && address.RuntimeKeyIsValid())
+            {
+                addresses[index] = address;
+                return StartPin(index, address);
+            }
+
+            if (reference.directRef)
+            {
+                prefabs[index] = reference.directRef;
+                return true;
+            }
+
+            settled[index] = true;
+            return true;
+        }
+
+        // False means the load could not be started yet. The caller leaves the cursor here and retries.
+        private static bool StartPin(int index, AssetReferenceT<GameObject> address)
+        {
+            if (!LoadingPhase.IsLoading)
+            {
+                handles[index] = EffectPools.PinAddress(address);
+                return true;
+            }
+
+            try
+            {
+                AsyncOperationHandle<GameObject> handle = Addressables.LoadAssetAsync<GameObject>(address);
+                if (!handle.IsValid())
+                {
+                    return false;
+                }
+
+                handles[index] = handle;
+                directPins[index] = true;
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                if (!directPinFailed)
+                {
+                    directPinFailed = true;
+                    RORO.GlobalLogger?.LogWarning($"Effect prefab load did not start: {exception.Message}");
+                }
+
+                return false;
+            }
+        }
+
+        private static void OnRunDestroy(Run run)
+        {
+            int first = ReleaseDirectPins();
+            if (first >= 0 && first < pinCursor)
+            {
+                pinCursor = first;
+            }
+        }
+
+        // Handles started directly are ours. The game does not release them on run end.
+        // Returns the first index that was released, or -1.
+        private static int ReleaseDirectPins()
+        {
+            int first = -1;
+            int count = directPins.Length < handles.Length ? directPins.Length : handles.Length;
+            for (int i = 0; i < count; i++)
+            {
+                if (!directPins[i])
+                {
+                    continue;
+                }
+
+                directPins[i] = false;
+                AsyncOperationHandle<GameObject> handle = handles[i];
+                handles[i] = default;
+                if (handle.IsValid())
+                {
+                    Addressables.Release(handle);
+                }
+
+                if (first < 0)
+                {
+                    first = i;
+                }
+            }
+
+            return first;
+        }
+
+        // Pooled effects only. DoNotPool stays out. WarmUp stored a keyword list and returned
+        // in microseconds, because this player creates the GPU program when the renderer draws.
+        // One hidden Camera.Render of the prefab is that draw. A second addressable ref holds
+        // the first prefab of each shader so the run-end release does not drop the program.
+        private static void WarmShaderStep(int count, bool rush)
+        {
+            if (ShadersWereEvicted())
+            {
+                ForgetShaderWarmup(true);
+                shaderHeld = new bool[count];
+            }
+
+            long started = Stopwatch.GetTimestamp();
+            int processed = 0;
+            while (shaderCursor < count)
+            {
+                EffectDef? def = EffectCatalog.GetEffectDef((EffectIndex)shaderCursor);
+                if (def == null || !def.shouldPool)
+                {
+                    shaderCursor++;
+                    continue;
+                }
+
+                GameObject? prefab = prefabs[shaderCursor];
+                if (!prefab)
+                {
+                    AsyncOperationHandle<GameObject> handle = handles[shaderCursor];
+                    if (!handle.IsValid())
+                    {
+                        // Not pinned yet. Skipping here would move the cursor past prefabs the pin
+                        // loop has not started, and those variants would never be compiled.
+                        if (shaderCursor >= pinCursor)
+                        {
+                            break;
+                        }
+
+                        shaderCursor++;
+                        continue;
+                    }
+
+                    if (!handle.IsDone)
+                    {
+                        break;
+                    }
+
+                    prefab = handle.Result;
+                    prefabs[shaderCursor] = prefab;
+                }
+
+                int index = shaderCursor;
+                shaderCursor++;
+                processed++;
+                if (prefab)
+                {
+                    RenderPrefabShaders(prefab!, index);
+                }
+
+                if (rush)
+                {
+                    if (LoadingPhase.BudgetExpired(started, processed))
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    float stepMs = (float)((Stopwatch.GetTimestamp() - started) * 1000d / Stopwatch.Frequency);
+                    if (processed >= WarmPaceSettings.ShaderPrefabsPerFrame || stepMs > ExpensiveWarmMs)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (!rush)
+            {
+                float warmMs = (float)((Stopwatch.GetTimestamp() - started) * 1000d / Stopwatch.Frequency);
+                if (warmMs > ExpensiveWarmMs)
+                {
+                    float cooldown = warmMs * 0.008f;
+                    warmNotBefore = Time.unscaledTime + (cooldown > 1f ? 1f : cooldown);
+                }
+            }
+
+            LoadingProgress.Set("Effect shaders", shaderCursor, count, shaderCursor < count);
+        }
+
+        private static bool ShadersWereEvicted()
+        {
+            for (int i = 0; i < pinnedShaders.Count; i++)
+            {
+                if (!pinnedShaders[i])
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static void ForgetShaderWarmup(bool releaseHolds)
+        {
+            if (releaseHolds)
+            {
+                ReleaseShaderHolds();
+            }
+
+            pinnedShaders.Clear();
+            shaderTraceLines.Clear();
+            drawMaterials.Clear();
+            shaderCursor = 0;
+            shaderWarmCalls = 0;
+            shaderSlowRenders = 0;
+            shaderWarmMicroseconds = 0;
+        }
+
+        // One extra ref per prefab that introduced a shader. The run pin is released on run end
+        // (immediately for direct loads, 12 seconds later for OnRunEnd). This ref is what keeps
+        // the shader object, and the GPU programs on it, loaded for the rest of the process.
+        private static void HoldPrefab(int index)
+        {
+            if (index < 0 || index >= shaderHeld.Length || shaderHeld[index])
+            {
+                return;
+            }
+
+            AssetReferenceT<GameObject>? address = addresses[index];
+            if (address != null && address.RuntimeKeyIsValid())
+            {
+                try
+                {
+                    AsyncOperationHandle<GameObject> handle = Addressables.LoadAssetAsync<GameObject>(address);
+                    if (!handle.IsValid())
+                    {
+                        return;
+                    }
+
+                    shaderHolds.Add(handle);
+                    shaderHeld[index] = true;
+                    return;
+                }
+                catch (System.Exception exception)
+                {
+                    RORO.GlobalLogger?.LogWarning($"Effect shader hold did not start: {exception.Message}");
+                    return;
+                }
+            }
+
+            GameObject? prefab = prefabs[index];
+            if (!prefab)
+            {
+                return;
+            }
+
+            shaderHoldPrefabs.Add(prefab!);
+            shaderHeld[index] = true;
+        }
+
+        private static void ReleaseShaderHolds()
+        {
+            for (int i = 0; i < shaderHolds.Count; i++)
+            {
+                AsyncOperationHandle<GameObject> handle = shaderHolds[i];
+                if (handle.IsValid())
+                {
+                    Addressables.Release(handle);
+                }
+            }
+
+            shaderHolds.Clear();
+            shaderHoldPrefabs.Clear();
+            if (shaderHeld.Length > 0)
+            {
+                System.Array.Clear(shaderHeld, 0, shaderHeld.Length);
+            }
+
+            ReleaseRig();
+        }
+
+        private static void PushTraceLine(string line)
+        {
+            shaderTraceLines.Insert(0, line);
+            if (shaderTraceLines.Count > 6)
+            {
+                shaderTraceLines.RemoveAt(6);
+            }
+        }
+
+        // Camera.Render is native CameraScripting::Render and returns on this thread.
+        // The copy stays under an inactive parent until its scripts are disabled, then one
+        // render into a 4x4 target. Particles that actually emit go through
+        // ParticleSystemRenderer, so GPU instancing is the renderer's own. Materials that
+        // emit nothing are drawn as a quad on the same camera, or the program is never asked for.
+        private static void RenderPrefabShaders(GameObject prefab, int index)
+        {
+            if (!EnsureRig() || warmRoot == null || warmCamera == null || warmMesh == null)
+            {
+                return;
+            }
+
+            GameObject? copy = null;
+            try
+            {
+                copy = Object.Instantiate(prefab, warmRoot);
+                copy.name = prefab.name;
+                SilenceWarmCopy(copy);
+                ApplyOmni(copy);
+                SetWarmLayer(copy.transform);
+                MatchGameCamera();
+                warmRoot.gameObject.SetActive(true);
+                EnableVisibleRenderers(copy);
+                SimulateParticles(copy);
+                CollectForceDraws(copy);
+                if (!NoteRenderedShaders(copy, index) && drawMaterials.Count == 0)
+                {
+                    return;
+                }
+
+                Vector3 position = WarmSpot;
+                for (int i = 0; i < drawMaterials.Count; i++)
+                {
+                    Graphics.DrawMesh(warmMesh, position, Quaternion.identity, drawMaterials[i], WarmLayer, warmCamera);
+                }
+
+                long started = Stopwatch.GetTimestamp();
+                warmCamera.Render();
+                int microseconds = (int)((Stopwatch.GetTimestamp() - started) * 1000000d / Stopwatch.Frequency);
+                shaderWarmCalls++;
+                shaderWarmMicroseconds += microseconds;
+                if (microseconds >= 1000)
+                {
+                    shaderSlowRenders++;
+                    PushTraceLine(prefab.name + " " + (microseconds / 1000d).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " мс");
+                }
+            }
+            catch (System.Exception exception)
+            {
+                RORO.GlobalLogger?.LogWarning($"Effect shader render did not finish for {prefab.name}: {exception.Message}");
+            }
+            finally
+            {
+                if (warmRoot != null)
+                {
+                    warmRoot.gameObject.SetActive(false);
+                }
+
+                if (copy != null)
+                {
+                    Object.Destroy(copy);
+                }
+            }
+        }
+
+        private static bool EnsureRig()
+        {
+            if (warmCamera != null && warmTarget != null && warmMesh != null && warmRoot != null && runtime != null)
+            {
+                return true;
+            }
+
+            ReleaseRig();
+            if (runtime == null)
+            {
+                return false;
+            }
+
+            GameObject rootObject = new GameObject("roro-shader-warm");
+            rootObject.transform.SetParent(runtime.transform, false);
+            rootObject.transform.position = WarmSpot;
+            rootObject.SetActive(false);
+            warmRoot = rootObject.transform;
+
+            GameObject cameraObject = new GameObject("roro-shader-warm-camera");
+            cameraObject.transform.SetParent(runtime.transform, false);
+            cameraObject.transform.position = WarmSpot + new Vector3(0f, 0f, -8f);
+            cameraObject.transform.rotation = Quaternion.identity;
+            Camera camera = cameraObject.AddComponent<Camera>();
+            camera.enabled = false;
+            camera.clearFlags = CameraClearFlags.SolidColor;
+            camera.backgroundColor = Color.black;
+            camera.cullingMask = 1 << WarmLayer;
+            camera.orthographic = true;
+            camera.orthographicSize = 40f;
+            camera.nearClipPlane = 0.01f;
+            camera.farClipPlane = 80f;
+            camera.depthTextureMode = DepthTextureMode.Depth;
+            warmTarget = new RenderTexture(4, 4, 16);
+            camera.targetTexture = warmTarget;
+            warmCamera = camera;
+
+            Mesh mesh = new Mesh { name = "roro-shader-warm-quad" };
+            mesh.vertices = new[]
+            {
+                new Vector3(-0.5f, -0.5f, 0f),
+                new Vector3(0.5f, -0.5f, 0f),
+                new Vector3(-0.5f, 0.5f, 0f),
+                new Vector3(0.5f, 0.5f, 0f)
+            };
+            mesh.triangles = new[] { 0, 2, 1, 2, 3, 1 };
+            mesh.uv = new[]
+            {
+                new Vector2(0f, 0f),
+                new Vector2(1f, 0f),
+                new Vector2(0f, 1f),
+                new Vector2(1f, 1f)
+            };
+            warmMesh = mesh;
+            return true;
+        }
+
+        private static void ReleaseRig()
+        {
+            if (warmCamera != null)
+            {
+                Object.Destroy(warmCamera.gameObject);
+            }
+
+            if (warmRoot != null)
+            {
+                Object.Destroy(warmRoot.gameObject);
+            }
+
+            if (warmTarget != null)
+            {
+                Object.Destroy(warmTarget);
+            }
+
+            if (warmMesh != null)
+            {
+                Object.Destroy(warmMesh);
+            }
+
+            warmCamera = null;
+            warmRoot = null;
+            warmTarget = null;
+            warmMesh = null;
+        }
+
+        // The stage camera decides Forward or Deferred. Particles stay transparent either way;
+        // copying the path keeps the pass the game camera would select.
+        private static void MatchGameCamera()
+        {
+            if (warmCamera == null)
+            {
+                return;
+            }
+
+            Camera? main = Camera.main;
+            if (!main)
+            {
+                return;
+            }
+
+            RenderingPath path = main.actualRenderingPath;
+            if (path == RenderingPath.DeferredShading || path == RenderingPath.Forward)
+            {
+                warmCamera.renderingPath = path;
+            }
+
+            warmCamera.allowHDR = main.allowHDR;
+        }
+
+        // EffectManagerHelper.OnEnable loads another addressable. AkEvent posts on enable.
+        // Both stay disabled, so activating the copy does not run them. Awake already ran.
+        private static void SilenceWarmCopy(GameObject copy)
+        {
+            MonoBehaviour[] behaviours = copy.GetComponentsInChildren<MonoBehaviour>(true);
+            for (int i = 0; i < behaviours.Length; i++)
+            {
+                MonoBehaviour behaviour = behaviours[i];
+                if (behaviour)
+                {
+                    behaviour.enabled = false;
+                }
+            }
+
+            AudioSource[] sources = copy.GetComponentsInChildren<AudioSource>(true);
+            for (int i = 0; i < sources.Length; i++)
+            {
+                AudioSource source = sources[i];
+                if (!source)
+                {
+                    continue;
+                }
+
+                source.playOnAwake = false;
+                source.enabled = false;
+            }
+
+            Light[] lights = copy.GetComponentsInChildren<Light>(true);
+            for (int i = 0; i < lights.Length; i++)
+            {
+                Light light = lights[i];
+                if (light)
+                {
+                    light.enabled = false;
+                }
+            }
+        }
+
+        // OmniEffect.Start picks one element from the prefab scale and assigns its material.
+        // Start does not run inside this call, so the same choice is applied here.
+        private static void ApplyOmni(GameObject copy)
+        {
+            OmniEffect[] omnis = copy.GetComponentsInChildren<OmniEffect>(true);
+            for (int i = 0; i < omnis.Length; i++)
+            {
+                OmniEffect omni = omnis[i];
+                if (!omni)
+                {
+                    continue;
+                }
+
+                float radius = omni.transform.localScale.x;
+                OmniEffect.OmniEffectGroup[] groups = omni.omniEffectGroups;
+                if (groups == null)
+                {
+                    continue;
+                }
+
+                for (int g = 0; g < groups.Length; g++)
+                {
+                    OmniEffect.OmniEffectElement[] elements = groups[g].omniEffectElements;
+                    if (elements == null)
+                    {
+                        continue;
+                    }
+
+                    for (int e = 0; e < elements.Length; e++)
+                    {
+                        OmniEffect.OmniEffectElement element = elements[e];
+                        if (element == null)
+                        {
+                            continue;
+                        }
+
+                        if (element.maximumValidRadius < radius)
+                        {
+                            continue;
+                        }
+
+                        ApplyOmniElement(element);
+                        break;
+                    }
+                }
+            }
+        }
+
+        private static void ApplyOmniElement(OmniEffect.OmniEffectElement element)
+        {
+            ParticleSystem system = element.particleSystem;
+            if (!system)
+            {
+                return;
+            }
+
+            if (element.particleSystemOverrideMaterial && system.TryGetComponent(out ParticleSystemRenderer renderer) && renderer)
+            {
+                renderer.sharedMaterial = element.particleSystemOverrideMaterial;
+            }
+
+            system.gameObject.SetActive(element.particleSystemEmitParticles);
+        }
+
+        private static void SetWarmLayer(Transform transform)
+        {
+            transform.gameObject.layer = WarmLayer;
+            for (int i = 0; i < transform.childCount; i++)
+            {
+                SetWarmLayer(transform.GetChild(i));
+            }
+        }
+
+        private static void EnableVisibleRenderers(GameObject copy)
+        {
+            Renderer[] renderers = copy.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer renderer = renderers[i];
+                if (renderer && renderer.gameObject.activeInHierarchy)
+                {
+                    renderer.enabled = true;
+                }
+            }
+        }
+
+        private static void SimulateParticles(GameObject copy)
+        {
+            ParticleSystem[] systems = copy.GetComponentsInChildren<ParticleSystem>(true);
+            for (int i = 0; i < systems.Length; i++)
+            {
+                ParticleSystem system = systems[i];
+                if (!system || !system.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    system.Simulate(0.05f, false, true, false);
+                }
+                catch (System.Exception)
+                {
+                }
+            }
+        }
+
+        private static void CollectForceDraws(GameObject copy)
+        {
+            drawMaterials.Clear();
+            Renderer[] renderers = copy.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer renderer = renderers[i];
+                if (!renderer)
+                {
+                    continue;
+                }
+
+                if (renderer is ParticleSystemRenderer particles)
+                {
+                    ParticleSystem system = particles.GetComponent<ParticleSystem>();
+                    bool emitted = system && system.gameObject.activeInHierarchy && system.particleCount > 0;
+                    if (!emitted)
+                    {
+                        AddDraw(particles.sharedMaterial);
+                    }
+
+                    Material trail = particles.trailMaterial;
+                    Material[] shared = particles.sharedMaterials;
+                    if (trail && (shared == null || !MaterialsContain(shared, trail)))
+                    {
+                        AddDraw(trail);
+                    }
+
+                    continue;
+                }
+
+                if (renderer is LineRenderer || renderer is TrailRenderer || !renderer.enabled || !renderer.gameObject.activeInHierarchy)
+                {
+                    Material[] materials = renderer.sharedMaterials;
+                    if (materials == null)
+                    {
+                        continue;
+                    }
+
+                    for (int m = 0; m < materials.Length; m++)
+                    {
+                        AddDraw(materials[m]);
+                    }
+                }
+            }
+
+            OmniEffect[] omnis = copy.GetComponentsInChildren<OmniEffect>(true);
+            for (int i = 0; i < omnis.Length; i++)
+            {
+                OmniEffect.OmniEffectGroup[] groups = omnis[i].omniEffectGroups;
+                if (groups == null)
+                {
+                    continue;
+                }
+
+                for (int g = 0; g < groups.Length; g++)
+                {
+                    OmniEffect.OmniEffectElement[] elements = groups[g].omniEffectElements;
+                    if (elements == null)
+                    {
+                        continue;
+                    }
+
+                    for (int e = 0; e < elements.Length; e++)
+                    {
+                        OmniEffect.OmniEffectElement element = elements[e];
+                        if (element != null)
+                        {
+                            AddDraw(element.particleSystemOverrideMaterial);
+                        }
+                    }
+                }
+            }
+
+            AssignRandomMaterial[] picks = copy.GetComponentsInChildren<AssignRandomMaterial>(true);
+            for (int i = 0; i < picks.Length; i++)
+            {
+                Material[] choices = picks[i].materials;
+                if (choices == null)
+                {
+                    continue;
+                }
+
+                for (int j = 0; j < choices.Length; j++)
+                {
+                    AddDraw(choices[j]);
+                }
+            }
+        }
+
+        private static void AddDraw(Material? material)
+        {
+            if (!material || !material!.shader)
+            {
+                return;
+            }
+
+            for (int i = 0; i < drawMaterials.Count; i++)
+            {
+                if (drawMaterials[i] == material)
+                {
+                    return;
+                }
+            }
+
+            drawMaterials.Add(material!);
+        }
+
+        private static bool MaterialsContain(Material[] materials, Material trail)
+        {
+            for (int i = 0; i < materials.Length; i++)
+            {
+                if (materials[i] == trail)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool NoteRenderedShaders(GameObject copy, int index)
+        {
+            bool any = false;
+            Renderer[] renderers = copy.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer renderer = renderers[i];
+                if (!renderer)
+                {
+                    continue;
+                }
+
+                Material[] materials = renderer.sharedMaterials;
+                if (materials == null)
+                {
+                    continue;
+                }
+
+                for (int m = 0; m < materials.Length; m++)
+                {
+                    any |= NoteMaterialShader(materials[m], index);
+                }
+
+                if (renderer is ParticleSystemRenderer particles)
+                {
+                    any |= NoteMaterialShader(particles.trailMaterial, index);
+                }
+            }
+
+            for (int i = 0; i < drawMaterials.Count; i++)
+            {
+                any |= NoteMaterialShader(drawMaterials[i], index);
+            }
+
+            return any;
+        }
+
+        private static bool NoteMaterialShader(Material? material, int index)
+        {
+            if (!material || !material!.shader)
+            {
+                return false;
+            }
+
+            if (!RememberShader(material!.shader))
+            {
+                return true;
+            }
+
+            HoldPrefab(index);
+            return true;
+        }
+
+        private static bool RememberShader(Shader shader)
+        {
+            int id = shader.GetInstanceID();
+            for (int i = 0; i < pinnedShaders.Count; i++)
+            {
+                Shader pinned = pinnedShaders[i];
+                if (pinned && pinned.GetInstanceID() == id)
+                {
+                    return false;
+                }
+            }
+
+            pinnedShaders.Add(shader);
+            return true;
+        }
+
+
+        private static bool TryWarm(int index)
+        {
+            if (settled[index])
+            {
+                return false;
+            }
+
+            int target = PeakTarget(index);
+            if (target == 0)
+            {
+                return false;
+            }
+
+            GameObject? prefab = prefabs[index];
+            if (!prefab)
+            {
+                AsyncOperationHandle<GameObject> handle = handles[index];
+                if (!handle.IsValid())
+                {
+                    // The warm cursor can lap the pin cursor. An invalid handle before Pin ran is not a failure.
+                    if (index < pinCursor)
+                    {
+                        settled[index] = true;
+                    }
+
+                    return false;
+                }
+
+                if (!handle.IsDone)
+                {
+                    return false;
+                }
+
+                prefab = handle.Result;
+                if (!prefab)
+                {
+                    settled[index] = true;
+                    return false;
+                }
+
+                prefabs[index] = prefab;
+            }
+
+            if (warmed[index] >= target)
+            {
+                return false;
+            }
+
+            EffectDef? def = EffectCatalog.GetEffectDef((EffectIndex)index);
+            if (def == null || !def.shouldPool || !EffectManager.UsePools)
+            {
+                settled[index] = true;
+                return false;
+            }
+
+            string prefabName = prefab!.name;
+
+            // A combat spawn may already have left enough idle copies in this pool. Checking one
+            // out and returning it again builds nothing, so do not spend the checkout or count it.
+            int idleBefore = EffectPools.PoolIdleCount(prefab);
+            if (idleBefore >= target)
+            {
+                if (warmed[index] == 0)
+                {
+                    warmedPrefabs++;
+                }
+
+                warmed[index] = (byte)target;
+                return false;
+            }
+
+            // GetObject pops an idle copy when one exists, so a checkout returned at once reuses
+            // the same copy every time. Holding every checkout until the target is reached is
+            // what forces the pool to instantiate distinct copies for Warm Instances above one.
+            int need = target - idleBefore;
+            int totalBefore = EffectPools.PoolTotalCount(prefab);
+            int checkoutBefore = EffectPools.CheckoutCount(prefab);
+            bool wasActive = prefab.activeSelf;
+            bool checkoutStarted = false;
+            heldHelpers.Clear();
+            long warmStart = Stopwatch.GetTimestamp();
+            try
+            {
+                if (wasActive)
+                {
+                    // An active instantiate runs Start immediately. Orb effects read effect data there and
+                    // throw, and the copy stays checked out of the pool.
+                    prefab.SetActive(false);
+                }
+
+                checkoutStarted = true;
+                for (int i = 0; i < need; i++)
+                {
+                    EffectManagerHelper? helper = EffectManager.GetPooledEffect(prefab, Park, Quaternion.identity);
+                    if (!helper)
+                    {
+                        settled[index] = true;
+                        ReturnHeld(prefabName);
+                        return false;
+                    }
+
+                    heldHelpers.Add(helper);
+                }
+            }
+            catch (System.Exception exception)
+            {
+                settled[index] = true;
+                ReturnHeld(prefabName);
+                if (checkoutStarted)
+                {
+                    EffectPools.DiscardCheckoutGrowth(prefab, checkoutBefore);
+                }
+
+                RORO.GlobalLogger?.LogWarning($"Effect warmup skipped {prefabName}: {exception.Message}");
+                return false;
+            }
+            finally
+            {
+                if (wasActive && prefab)
+                {
+                    prefab.SetActive(true);
+                }
+            }
+
+            int builtCopies = EffectPools.PoolTotalCount(prefab) - totalBefore;
+            if (builtCopies < 0)
+            {
+                builtCopies = 0;
+            }
+
+            if (!ReturnHeld(prefabName))
+            {
+                settled[index] = true;
+                return false;
+            }
+
+            if (warmed[index] == 0)
+            {
+                warmedPrefabs++;
+            }
+
+            warmed[index] = (byte)target;
+            instancesBuilt += builtCopies;
+
+            // One instantiate cannot be split, so a costly prefab earns a cooldown instead of
+            // letting the next frame pay for another one right away.
+            float warmMs = (float)((Stopwatch.GetTimestamp() - warmStart) * 1000d / Stopwatch.Frequency);
+            if (warmMs > ExpensiveWarmMs)
+            {
+                float cooldown = warmMs * 0.008f;
+                warmNotBefore = Time.unscaledTime + (cooldown > 1f ? 1f : cooldown);
+            }
+
+            return true;
+        }
+
+        private static bool ReturnHeld(string prefabName)
+        {
+            bool parked = true;
+            for (int i = 0; i < heldHelpers.Count; i++)
+            {
+                EffectManagerHelper helper = heldHelpers[i];
+                try
+                {
+                    helper.ReturnToPool();
+                }
+                catch (System.Exception exception)
+                {
+                    if (helper)
+                    {
+                        helper.gameObject.SetActive(false);
+                    }
+
+                    EffectPools.Discard(helper);
+                    parked = false;
+                    RORO.GlobalLogger?.LogWarning($"Effect warmup could not park {prefabName}: {exception.Message}");
+                }
+            }
+
+            heldHelpers.Clear();
+            return parked;
+        }
+
+        private static int PeakCap()
+        {
+            // 20 is the game's own default pool capacity: a return past it destroys the copy,
+            // so building more than that ahead of time cannot be held anyway.
+            if (warmFullPeak?.Value == true)
+            {
+                return 20;
+            }
+
+            return Clamp(warmPeakCopies?.Value ?? 4, 0, 20);
+        }
+
+        private static int PeakTarget(int index)
+        {
+            int cap = PeakCap();
+            int peak = index >= 0 && index < peakInUse.Length ? peakInUse[index] : 0;
+            return peak < cap ? peak : cap;
+        }
+
+        private static void Consider(VFXAttributes attributes, Vector3 cameraPosition, float stopSqr, float resumeSqr, bool offScreen)
+        {
+            ParticleSystem[]? systems = attributes.secondaryParticleSystem;
+            Light[]? lights = attributes.optionalLights;
+            bool hasSecondary = systems != null && systems.Length > 0;
+            bool hasLights = lights != null && lights.Length > 0;
+            if (!hasSecondary && !hasLights)
+            {
+                return;
+            }
+
+            if (!gates.TryGetValue(attributes, out EffectCullState? gate) || gate == null)
+            {
+                gate = new EffectCullState();
+                gates[attributes] = gate;
+            }
+
+            Vector3 delta = attributes.transform.position - cameraPosition;
+            float distanceSqr = delta.sqrMagnitude;
+            bool tooFar = distanceSqr > (gate.secondaryStopped ? resumeSqr : stopSqr);
+            bool hidden = false;
+            if (!tooFar && offScreen)
+            {
+                // Distance alone already stops this effect, so the six-plane test is only
+                // paid for effects close enough to stay visible on distance grounds.
+                if (!frustumReady)
+                {
+                    Camera? camera = gameplayCamera;
+                    if (camera)
+                    {
+                        GeometryUtility.CalculateFrustumPlanes(camera, Frustum);
+                        frustumReady = true;
+                    }
+                }
+
+                if (frustumReady)
+                {
+                    hidden = !GeometryUtility.TestPlanesAABB(Frustum, new Bounds(attributes.transform.position, CullBounds));
+                }
+            }
+
+            bool stop = tooFar || hidden;
+            if (stop == gate.secondaryStopped)
+            {
+                return;
+            }
+
+            if (stop)
+            {
+                StopSecondary(systems, lights, gate);
+                gate.secondaryStopped = true;
+                culledEffects++;
+                return;
+            }
+
+            PlaySecondary(systems, lights, gate);
+            gate.secondaryStopped = false;
+            if (culledEffects > 0)
+            {
+                culledEffects--;
+            }
+        }
+
+        private static void StopSecondary(ParticleSystem[]? systems, Light[]? lights, EffectCullState gate)
+        {
+            if (systems != null)
+            {
+                for (int i = 0; i < systems.Length; i++)
+                {
+                    ParticleSystem? system = systems[i];
+                    if (system)
+                    {
+                        system.Stop(false, ParticleSystemStopBehavior.StopEmittingAndClear);
+                    }
+                }
+            }
+
+            if (lights == null)
+            {
+                return;
+            }
+
+            if (gate.lightWasEnabled == null || gate.lightWasEnabled.Length != lights.Length)
+            {
+                gate.lightWasEnabled = new bool[lights.Length];
+            }
+
+            for (int i = 0; i < lights.Length; i++)
+            {
+                Light? light = lights[i];
+                if (!light)
+                {
+                    continue;
+                }
+
+                gate.lightWasEnabled[i] = light.enabled;
+                light.enabled = false;
+            }
+        }
+
+        private static void PlaySecondary(ParticleSystem[]? systems, Light[]? lights, EffectCullState gate)
+        {
+            if (systems != null)
+            {
+                for (int i = 0; i < systems.Length; i++)
+                {
+                    ParticleSystem? system = systems[i];
+                    if (system)
+                    {
+                        system.Play(false);
+                    }
+                }
+            }
+
+            RestoreLights(lights, gate);
+        }
+
+        private static void RestoreLights(Light[]? lights, EffectCullState gate)
+        {
+            if (lights == null || gate.lightWasEnabled == null)
+            {
+                return;
+            }
+
+            int count = lights.Length < gate.lightWasEnabled.Length ? lights.Length : gate.lightWasEnabled.Length;
+            for (int i = 0; i < count; i++)
+            {
+                Light? light = lights[i];
+                if (light)
+                {
+                    light.enabled = gate.lightWasEnabled[i];
+                }
+            }
+        }
+
+        private static void ResumeAll()
+        {
+            foreach (KeyValuePair<VFXAttributes, EffectCullState> pair in gates)
+            {
+                EffectCullState? gate = pair.Value;
+                VFXAttributes? attributes = pair.Key;
+                if (gate == null || !gate.secondaryStopped || !attributes)
+                {
+                    continue;
+                }
+
+                PlaySecondary(attributes.secondaryParticleSystem, attributes.optionalLights, gate);
+                gate.secondaryStopped = false;
+            }
+
+            culledEffects = 0;
+        }
+
+        private static void RefreshStatus()
+        {
+            int loaded = 0;
+            int pinned = 0;
+            for (int i = 0; i < handles.Length; i++)
+            {
+                if (prefabs[i] || handles[i].IsValid())
+                {
+                    pinned++;
+                }
+
+                if (prefabs[i] || (handles[i].IsValid() && handles[i].Status == AsyncOperationStatus.Succeeded))
+                {
+                    loaded++;
+                }
+            }
+
+            EffectPools.CountPools(out int pools, out int idle, out int inUse);
+            int cap = PeakCap();
+
+            statusBuilder.Clear();
+            statusBuilder.Append("Effects ").Append(handles.Length);
+            statusBuilder.Append("\nPinned ").Append(pinned).Append("  loaded ").Append(loaded);
+            statusBuilder.Append("\nWarmed prefabs ").Append(warmedPrefabs).Append("  copies built ").Append(instancesBuilt).Append("  peak cap ").Append(cap).Append("  queued ").Append(warmQueue.Count);
+            statusBuilder.Append("\nPools ").Append(pools).Append("  idle ").Append(idle).Append("  in use ").Append(inUse);
+            statusBuilder.Append("\nLive ").Append(VFXAttributes.readonlyVFXList.Count).Append("  secondary culled ").Append(culledEffects);
+            EffectPools.AppendParkReport(statusBuilder);
+            statusText = statusBuilder.ToString();
+        }
+
+        private static void RefreshShaderStatus()
+        {
+            int live = 0;
+            for (int i = 0; i < pinnedShaders.Count; i++)
+            {
+                if (pinnedShaders[i])
+                {
+                    live++;
+                }
+            }
+
+            statusBuilder.Clear();
+            statusBuilder.Append(warmShaders?.Value == true ? "Шейдеры эффектов: скрытый рендер включён" : "Шейдеры эффектов: скрытый рендер выключен");
+            statusBuilder.Append("\nКурсор ").Append(shaderCursor).Append('/').Append(prefabs.Length);
+            statusBuilder.Append("  Camera.Render ").Append(shaderWarmCalls);
+            statusBuilder.Append(", дольше 1 мс: ").Append(shaderSlowRenders);
+            statusBuilder.Append(", сумма ");
+            AppendMicros(statusBuilder, shaderWarmMicroseconds);
+            statusBuilder.Append("\nЖивые шейдеры ").Append(live).Append('/').Append(pinnedShaders.Count);
+            statusBuilder.Append("  удержано префабов ").Append(shaderHolds.Count + shaderHoldPrefabs.Count);
+            statusBuilder.Append("\nДольше 1 мс — драйвер собирал программу в этом вызове. Короче — этот draw её не собирал.");
+            statusBuilder.Append("\nРелизный DX11 не пишет Shader.CreateGPUProgram.");
+            EffectPools.AppendParkReport(statusBuilder);
+            for (int i = 0; i < shaderTraceLines.Count; i++)
+            {
+                statusBuilder.Append('\n').Append(shaderTraceLines[i]);
+            }
+
+            shaderStatusText = statusBuilder.ToString();
+        }
+
+        private static void AppendMicros(StringBuilder builder, long microseconds)
+        {
+            if (microseconds >= 1000)
+            {
+                builder.Append((microseconds / 1000d).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
+                builder.Append(" мс");
+                return;
+            }
+
+            builder.Append(microseconds);
+            builder.Append(" мкс");
+        }
+
+        private static int Clamp(int value, int min, int max)
+        {
+            if (value < min)
+            {
+                return min;
+            }
+
+            return value > max ? max : value;
+        }
+    }
+
+    internal sealed class EffectCullState
+    {
+        internal bool secondaryStopped;
+        internal bool[]? lightWasEnabled;
+    }
+}
