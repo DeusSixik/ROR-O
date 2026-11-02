@@ -119,7 +119,7 @@ namespace ROR_O
         internal const float ShaderStatusBlockHeight = 250f;
         internal static ConfigEntry<bool>? LogStatusEntry => logStatus;
 
-        internal static bool KeepPools => keepPools?.Value ?? true;
+        internal static bool KeepPools => keepPools?.Value == true;
         internal static bool KeepCopiesActive => keepCopiesActive?.Value == true;
         internal static int ActiveParkLimit => activeParkLimit != null ? Clamp(activeParkLimit.Value, 0, 192) : 96;
 
@@ -130,19 +130,19 @@ namespace ROR_O
             warmEffects = config.Bind(
                 section,
                 "Warm Effect Prefabs",
-                true,
+                false,
                 OptionCopy.EffectWarm);
 
             keepPools = config.Bind(
                 section,
                 "Keep Effect Pools",
-                true,
+                false,
                 OptionCopy.KeepPools);
 
             keepCopiesActive = config.Bind(
                 section,
                 "Keep Effect Copies Active",
-                true,
+                false,
                 OptionCopy.KeepCopiesActive);
 
             activeParkLimit = config.Bind(
