@@ -45,6 +45,9 @@ namespace ROR_O
             ElitePin,
             SpawnImmunity,
             ProgressRings,
+            SmoothTrail,
+            UNetUpdate,
+            OrbUpdate,
             Count
         }
 
@@ -82,7 +85,10 @@ namespace ROR_O
             "EffectRuntime.NoteSpawn",
             "SpawnPrewarm.EliteDisplays",
             "SpawnPrewarm.LateImmunity",
-            "LoadingProgress.Rings"
+            "LoadingProgress.Rings",
+            "SmoothTrailMesh.LateUpdate",
+            "NetworkIdentity.UNetUpdate",
+            "OrbEffectSingleton.Update"
         };
 
         private static readonly long[] PhaseLive = new long[(int)Phase.Count];

@@ -280,6 +280,7 @@ namespace ROR_O
 
             SpawnPrewarm.Bind(config);
             EffectRuntime.Bind(config);
+            FrameTimeGraph.Bind(config);
 
             RiskOfOptionsIntegration.Hold(new RiskOfOptionsCatalog
             {
@@ -334,6 +335,7 @@ namespace ROR_O
                 CullEffectsOffScreen = EffectRuntime.CullOffScreenEntry,
                 EffectCullInterval = EffectRuntime.CullIntervalEntry,
                 ShowEffectStatus = EffectRuntime.ShowStatusEntry,
+                ShowFrameGraph = FrameTimeGraph.ShowEntry,
                 ShowShaderStatus = EffectRuntime.ShowShaderStatusEntry,
                 LogEffectStatus = EffectRuntime.LogStatusEntry,
             });
@@ -367,10 +369,14 @@ namespace ROR_O
             HitchWatchStartup.Register(this);
             patches.RegisterDynamicBoneJobsPatch.Register(this);
             patches.RegisterSteamP2PPatch.Register(this);
+            patches.ParallelSnapshotGather.Register(this);
+            patches.ReuseSmoothTrailMeshPatch.Register(this);
+            patches.SkipCleanUNetUpdatePatch.Register(this);
             RiskOfOptionsIntegration.Publish();
             gameObject.AddComponent<SpawnPrewarm>();
             gameObject.AddComponent<EffectRuntime>();
             gameObject.AddComponent<LoadingProgressView>();
+            gameObject.AddComponent<FrameTimeGraph>();
         }
     }
 }

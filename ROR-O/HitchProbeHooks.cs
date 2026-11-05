@@ -5,6 +5,7 @@ using HarmonyLib;
 using RoR2;
 using RoR2.CharacterAI;
 using RoR2.Navigation;
+using UnityEngine.Networking;
 
 namespace ROR_O
 {
@@ -32,6 +33,9 @@ namespace ROR_O
             Try(harmony, typeof(EffectManager), nameof(EffectManager.SpawnEffect), "Effect", typeof(EffectIndex), typeof(EffectData), typeof(bool));
             Try(harmony, typeof(BaseAI), nameof(BaseAI.ManagedFixedUpdate), "Ai");
             Try(harmony, typeof(NodeGraphNavigationSystem), "UpdateAgent", "Path");
+            Try(harmony, typeof(SmoothTrailMesh), "LateUpdate", "Trail");
+            Try(harmony, typeof(NetworkIdentity), nameof(NetworkIdentity.UNetUpdate), "UNet");
+            Try(harmony, typeof(OrbEffectSingleton), nameof(OrbEffectSingleton.Update), "Orb");
         }
 
         internal static void Uninstall(Harmony harmony)
@@ -102,6 +106,18 @@ namespace ROR_O
             internal static void PathPrefix(out long __state) => Begin(out __state);
 
             internal static Exception PathFinalizer(long __state, Exception __exception) => End(HitchProbes.Id.PathAgent, __state, __exception);
+
+            internal static void TrailPrefix(out long __state) => Begin(out __state);
+
+            internal static Exception TrailFinalizer(long __state, Exception __exception) => End(HitchProbes.Id.SmoothTrail, __state, __exception);
+
+            internal static void UNetPrefix(out long __state) => Begin(out __state);
+
+            internal static Exception UNetFinalizer(long __state, Exception __exception) => End(HitchProbes.Id.UNetUpdate, __state, __exception);
+
+            internal static void OrbPrefix(out long __state) => Begin(out __state);
+
+            internal static Exception OrbFinalizer(long __state, Exception __exception) => End(HitchProbes.Id.OrbUpdate, __state, __exception);
 
             private static void Begin(out long state)
             {
