@@ -41,6 +41,12 @@ namespace ROR_O
         public ConfigEntry<int>? GenericIkInvisibleUpdateInterval { get; set; }
         public ConfigEntry<int>? GenericIkRecentlyVisibleGraceFrames { get; set; }
         public ConfigEntry<bool>? EnableThreadedSteamP2P { get; set; }
+        public ConfigEntry<bool>? EnableExperimentalParallelSnapshots { get; set; }
+        public ConfigEntry<bool>? EnableExperimentalSnapshotOverlap { get; set; }
+        public ConfigEntry<bool>? EnableExperimentalCharacterMotorPose { get; set; }
+        public ConfigEntry<bool>? EnableExperimentalCharacterSimulatedPose { get; set; }
+        public ConfigEntry<bool>? EnableExperimentalTrailMeshBuffers { get; set; }
+        public ConfigEntry<bool>? EnableExperimentalSkipCleanUNetUpdate { get; set; }
         public ConfigEntry<bool>? EnableNetworkDebug { get; set; }
         public ConfigEntry<SettingsProfiles.Profile>? SpawnsProfile { get; set; }
         public ConfigEntry<bool>? EnableSpawnPrewarm { get; set; }
@@ -63,6 +69,7 @@ namespace ROR_O
         public ConfigEntry<bool>? CullEffectsOffScreen { get; set; }
         public ConfigEntry<int>? EffectCullInterval { get; set; }
         public ConfigEntry<bool>? ShowEffectStatus { get; set; }
+        public ConfigEntry<bool>? ShowFrameGraph { get; set; }
         public ConfigEntry<bool>? ShowShaderStatus { get; set; }
         public ConfigEntry<bool>? LogEffectStatus { get; set; }
         public ConfigEntry<bool>? EnableHitchWatch { get; set; }
@@ -148,6 +155,7 @@ namespace ROR_O
             menu.CheckBox(catalog.ShowMobStatus, null, null, general);
             menu.CheckBox(catalog.LogMobStatus, null, null, general);
             menu.CheckBox(catalog.ShowEffectStatus, null, null, general);
+            menu.CheckBox(catalog.ShowFrameGraph, null, null, general);
             menu.CheckBox(catalog.ShowShaderStatus, null, "Show Shader Compile", general);
             menu.CheckBox(catalog.LogEffectStatus, null, null, general);
             menu.CheckBox(catalog.EnableNetworkDebug, null, "Network Debug Overlay", general);
@@ -188,6 +196,12 @@ namespace ROR_O
             menu.IntSlider(catalog.GenericIkInvisibleUpdateInterval, 2, 30, genericIkDisabled);
             menu.IntSlider(catalog.GenericIkRecentlyVisibleGraceFrames, 0, 120, genericIkDisabled);
             menu.CheckBox(catalog.EnableThreadedSteamP2P);
+            menu.CheckBox(catalog.EnableExperimentalParallelSnapshots, null, "<color=#FFDD44>[Experimental]</color> Parallel Snapshots");
+            menu.CheckBox(catalog.EnableExperimentalSnapshotOverlap, null, "<color=#FFDD44>[Experimental]</color> Snapshot Overlap");
+            menu.CheckBox(catalog.EnableExperimentalCharacterMotorPose, null, "<color=#FFDD44>[Experimental]</color> Character Motor Pose");
+            menu.CheckBox(catalog.EnableExperimentalCharacterSimulatedPose, null, "<color=#FFDD44>[Experimental]</color> Character Simulated Pose");
+            menu.CheckBox(catalog.EnableExperimentalTrailMeshBuffers, null, "<color=#FFDD44>[Experimental]</color> Trail Mesh Buffers");
+            menu.CheckBox(catalog.EnableExperimentalSkipCleanUNetUpdate, null, "<color=#FFDD44>[Experimental]</color> Skip Clean UNet Update");
 
             menu.Choice(catalog.SpawnsProfile);
             Func<bool> spawnPrewarmOff = () => catalog.EnableSpawnPrewarm?.Value != true;

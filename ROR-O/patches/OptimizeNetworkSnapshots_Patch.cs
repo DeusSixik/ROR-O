@@ -43,6 +43,13 @@ namespace ROR_O.patches
                 return false;
             }
 
+            if (ParallelSnapshotGather.Enabled)
+            {
+                // The pose is read with every other due pose at the end of this physics step.
+                ParallelSnapshotGather.QueueProjectile(__instance);
+                return false;
+            }
+
             if (!NeedsUpdate(__instance))
             {
                 return false;
@@ -51,20 +58,25 @@ namespace ROR_O.patches
             Transform transform = TransformRef(__instance);
             Vector3 position = transform.position;
             Quaternion rotation = transform.rotation;
-            if (!position.Equals(__instance.serverPosition))
-            {
-                __instance.serverPosition = position;
-                __instance.SetDirtyBit(PositionDirtyBit);
-            }
-
-            if (!rotation.Equals(__instance.serverRotation))
-            {
-                __instance.serverRotation = rotation;
-                __instance.SetDirtyBit(RotationDirtyBit);
-            }
-
-            NeedsUpdateFlagRef(__instance) = false;
+            CommitProjectile(__instance, position, rotation);
             return false;
+        }
+
+        internal static void CommitProjectile(ProjectileNetworkTransform projectile, Vector3 position, Quaternion rotation)
+        {
+            if (!position.Equals(projectile.serverPosition))
+            {
+                projectile.serverPosition = position;
+                projectile.SetDirtyBit(PositionDirtyBit);
+            }
+
+            if (!rotation.Equals(projectile.serverRotation))
+            {
+                projectile.serverRotation = rotation;
+                projectile.SetDirtyBit(RotationDirtyBit);
+            }
+
+            NeedsUpdateFlagRef(projectile) = false;
         }
     }
 
@@ -137,7 +149,15 @@ namespace ROR_O.patches
                 }
 
                 character.lastPositionTransmitTime = fixedTime;
-                character.newestNetSnapshot = BuildSnapshot(character);
+                if (ParallelSnapshotGather.Enabled)
+                {
+                    ParallelSnapshotGather.QueueCharacter(__instance, character);
+                    continue;
+                }
+
+                character.newestNetSnapshot = ParallelSnapshotGather.UsesMotorPosition
+                    ? ParallelSnapshotGather.BuildCharacterSnapshot(character)
+                    : BuildSnapshot(character);
                 queue.Enqueue(new CharacterNetworkTransformManager.NetSnapshot
                 {
                     gameObject = character.gameObject,
