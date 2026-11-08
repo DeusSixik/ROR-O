@@ -1,73 +1,72 @@
 # ROR-O
 
-Performance optimization mod for Risk of Rain 2.
+ROR-O is a performance-focused mod for Risk of Rain 2. It reduces unnecessary work across the UI, damage numbers, character animation, effects, gameplay systems, and multiplayer networking.
 
-`ROR-O` focuses on real hot paths found in profiler captures instead of broad "magic FPS boost" claims. The mod reduces repeated UI work, trims heavy runtime systems when they are offscreen, and moves Steam traffic off the host frame.
+The mod focuses on avoiding repeated updates, reusing existing data, and skipping work that is not currently needed.
 
-## What it optimizes
+## UI and Menus
 
-Current optimization areas include:
+- Reduces unnecessary refreshes of lobby lists, player icons, and survivor availability checks.
+- Reuses downloaded Steam avatars instead of repeatedly rebuilding their textures.
+- Avoids rebuilding chat history and inventory displays when their contents have not changed.
+- Reduces repeated setup work when updating scoreboard entries.
+- With Looking Glass installed, reuses previously generated item descriptions and avoids rewriting buff timer text when its displayed value has not changed.
 
-- Lobby and menu refresh paths
-  - player list refreshes
-  - social icon / avatar update paths
-  - survivor availability checks
-- Text / UI hot paths
-  - repeated `TextMeshPro` text updates
-  - chat, inventory, and scoreboard rebuilds that show the same result
-  - UI raycasts while the pointer stays still
-  - repeated text style changes
-- Damage numbers
-  - load shedding under extreme combat load
-  - quality presets: Lossless, Performance, Potato
-- Dynamic bones
-  - throttles offscreen and distant rigs
-  - simulates busy frames on worker threads
-  - quality presets: Lossless, Performance, Potato
-- Generic IK (`GenericIK.dll`)
-  - throttles offscreen IK rigs
-  - quality presets: Lossless, Performance, Potato
-- Steam networking
-  - packet send and receive off the main thread
-- Spawn
-  - warms monster and pickup prefabs at stage start
-- Cache-based gameplay hot path cleanup
-  - `ChildLocator` / transform lookup caching
-  - component access caching for selected hot loops
-  - survivor unlock cache
-  - morgue / run history cache
+## Damage Numbers
 
-## Why this mod exists
+In crowded fights, ROR-O adaptively reduces the number of ordinary damage numbers being spawned.
 
-The mod was built by profiling real gameplay and fixing expensive paths one by one. During testing, the biggest wins came from:
+Important damage indicators are preserved by default, including critical hits, healing, weak-point hits, sniper hits, luminous hits, and knockback hits. The most aggressive profile can also reduce the number of critical damage indicators.
 
-- reducing repeated UI rebuild work
-- reducing offscreen / far-away animation overhead
-- keeping Steam polling off the host frame
-- reducing waste from repeated menu and lobby refresh logic
+Already spawned damage numbers continue animating normally.
 
-It is especially aimed at:
+## Animation and IK
 
-- modded runs with lots of UI activity
-- scenes with many enemies or effects
-- long runs where animation systems and UI become expensive
-- multiplayer, where the host was spending frame time on Steam
+- Dynamic Bone simulation runs less frequently for distant or off-screen characters.
+- Recently off-screen characters retain normal update frequency briefly before reduced updates begin.
+- Some Dynamic Bone simulation work can be processed through background jobs.
+- Generic IK updates less frequently while its character is off-screen and returns to normal updates when visible again.
 
-## Important notes
+These optimizations preserve normal update behavior for characters that are visible and close to the camera.
 
-- This mod does **not** promise to fix every stutter source.
-- Risk of Rain 2 still has expensive systems such as Addressables loading, spawning, and audio registration that can create spikes on their own.
-- Warming a prefab does not draw it, so the first time that monster appears on screen can still hitch.
+## Gameplay and Effects
+
+- Monster assets, including boss assets, are prepared ahead of time across multiple frames instead of doing all preparation at once.
+- Distant or off-screen effects can have their secondary particles and optional lights disabled.
+- The main effect continues running; only its optional visual components are affected.
+- Several effect-spawning operations reuse existing data and references to avoid unnecessary repeated work.
+
+Effect prewarming and additional pool-retention options are available but are not enabled in a fresh configuration by default.
+
+## Networking
+
+ROR-O reduces repeated work when preparing character and projectile position updates. Network snapshots are prepared when an update is due instead of being rebuilt unnecessarily on every physics step.
+
+For client-side Steam networking, packet sending and receiving can run in a background thread. Packet processing and game-side handling remain on the main thread. The Steam game-server connection continues to use the main thread.
+
+If the background thread cannot be started or stops working, client Steam networking falls back to the main thread.
+
+## Additional Optimizations
+
+ROR-O also reduces repeated component lookups, hierarchy searches, and UI updates across various gameplay systems.
+
+Previously retrieved references and unchanged data can be reused instead of being searched for or rebuilt repeatedly.
+
+## Performance
+
+<!-- Future frame-time performance graphs will be added here. -->
+
+## Compatibility
+
+Mods that add or modify survivors, monsters, items, effects, or UI elements may interact with ROR-O's optimizations in ways that have not been tested.
 
 ## Installation
 
-### Thunderstore / Mod Manager
+Install ROR-O with a mod manager into a profile that already has BepInEx.
 
-Install `ROR-O` into a profile that already has BepInEx. BepInExPack is not required.
+BepInExPack is not required.
 
-### Manual installation
-
-Place `ROR-O.dll` into:
+For manual installation, place `ROR-O.dll` in:
 
 ```text
 BepInEx/plugins/ror-o/
@@ -75,77 +74,37 @@ BepInEx/plugins/ror-o/
 
 ## Configuration
 
-The config file is created here:
+Settings are saved in:
 
-```text
-BepInEx/config/net.sixik.plugin.roro.cfg
-```
+`BepInEx/config/net.sixik.plugin.roro.cfg`
 
-Main sections currently exposed:
+Configuration sections include General, Damage Numbers, Dynamic Bones, Generic IK, Spawns, Effects, Network, and Profiler.
 
-- `[Damage Numbers]`
-- `[Dynamic Bones]`
-- `[Generic IK]`
-- `[Network]`
-- `[Spawns]`
-- `[Profiler]`
+Several optimization categories provide presets:
 
-`[Profiler]` includes an optional Hitch Watch and a switch for the separately installed Mono profiler (Dev builds only).
+- **Lossless** — prioritizes preserving the original behavior.
+- **Performance** — balanced performance-oriented settings.
+- **Potato** — more aggressive optimizations, which may reduce visual updates.
+- **Custom** — allows individual settings to be configured.
 
-## Integrations
+A fresh configuration uses Performance for Damage Numbers, Dynamic Bones, Generic IK, and Spawns. Effects uses Custom, with secondary effect culling enabled and effect prewarming and pool-retention options disabled.
 
-- Looking Glass
-- Risk of Options
-- Mono Profiler (Dev builds only)
+Some additional options are experimental and disabled by default.
 
-## Development
-
-Close the game before building. From the repository root:
-
-```text
-dotnet build ROR-O/ROR-O.csproj -c Debug
-```
-
-The build finds the Steam install and profiles from r2modman, Thunderstore Mod Manager, or Gale. The first success writes gitignored `ROR-O/roro.user.props` and later builds reuse it. The profile used to compile must contain `LookingGlass.dll`. Players do not need that mod.
-
-If several profiles are found:
-
-```text
-dotnet build ROR-O/ROR-O.csproj -c Debug -p:ProfileDir="D:\profiles\my-profile"
-```
-
-A unique profile name is enough. Profiles outside AppData need `ProfileRoot`, or a copy of `ROR-O/roro.user.props.example`. Interactive choice: `powershell -File ROR-O/resolve-paths.ps1 -Ask`.
-
-Debug copies `ROR-O.dll` into the profile. Release also writes `ROR-O/bin/Release/netstandard2.1/ROR_O-v` plus the version. The canonical version is `mod_version` in `version.properties`; the build uses it for the plugin metadata, assembly metadata, ZIP name, and manifest inside the ZIP. Use `-p:DeployOnBuild=false` to skip the copy.
-
-Put the compile-time DLLs in `otherMods/game/`, `otherMods/unity/`, `otherMods/wwise/`, and `otherMods/bepinex/`; keep `LookingGlass.dll` directly under `otherMods/`. The project maps references to these folders and builds without a local game installation when the bundle includes `RoR2.dll`, `Assembly-CSharp.dll`, `BepInEx.dll`, and `0Harmony.dll`. Without the complete bundle, local builds keep using the existing Steam/profile path discovery.
-
-Changing `version.properties` on `main` runs GitHub Actions on a GitHub-hosted Windows runner. If the matching `v` tag does not exist, the workflow verifies the DLL bundle, builds the mod, creates the tag, and publishes a GitHub Release of that version. A release can also be started manually from the Actions tab.
-
-## Known issues
-
-- **SeekersPatcher.** Both mods patch the same game code. Together they can break those methods.
-- **Content mods.** Added survivors, monsters, items, and UI can hit patched methods in untested ways.
-- **Stage changes.** Prefab warming can freeze the game while the next stage loads.
-- **Profilers.** Hitch Watch and the Mono profiler both miss part of a frame. One has no managed call trees. The other has no per-frame tail. Running both adds profiler overhead to the times.
-- **Allocations in the patches.** Some patches still allocate (lists, arrays, strings) on the frames they are meant to make cheaper (report pls). 
-- **Game updates and stolen bytes.** A game update may takes a run of bytes from a method and replaces them with a jump. After an update that run can end mid-instruction and pull in neighboring bytes, inside the method or from the next one. The patch then runs those bytes.
+If Risk of Options is installed, ROR-O settings are available through its configuration menu.
 
 ## Credits
 
 ### Code
-
 - **DeusSixik** — main developer. Review, and guy how know the code runs)))
 - **Krupter** (Ксения Мазерати) — bugs, profilers, and debugging.
 
 ### Testing
-
 - **Дарья Литовская** — plays almost every day to help debug. Several hundred hours...
 - **Solderyn** — runs the measurements
 - **Arisa** — playtesting
 
 ### Art
-
 - **Samuel** — Aboba-art
 
 ## Contributing
@@ -156,13 +115,14 @@ Issues and merge requests are welcome. People who help that way are listed here.
 
 ## Source
 
-GitHub repository:
+[GitHub Repository](https://github.com/DeusSixik/ROR-O)
 
-- `https://github.com/DeusSixik/ROR-O`
+Build instructions are available in [DEVELOPMENT.md](https://github.com/DeusSixik/ROR-O/blob/main/DEVELOPMENT.md).
 
 ## License
 
-See `LICENSE.txt`.
+GNU General Public License v3. See `LICENSE.txt`.
 
-## Support US
-- [Boosty](https://boosty.to/sixik)
+## Support
+
+[Boosty](https://boosty.to/sixik)
